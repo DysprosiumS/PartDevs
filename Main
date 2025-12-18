@@ -2,19 +2,12 @@ import numpy as np
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
+import csv
 
 
 def read_coordinates_from_path(path, filenames=None, delimiter=None):
     """
     Считывает координаты частиц из файлов в указанной папке.
-
-    Параметры:
-    path: путь к папке с файлами
-    filenames: список имен файлов [x_file, y_file, z_file] (опционально)
-    delimiter: разделитель в файлах (по умолчанию пробел)
-
-    Возвращает:
-    tuple: (x_coords, y_coords, z_coords, coordinates_3d)
     """
     if filenames is None:
         filenames = ['X1000.txt', 'Y1000.txt', 'Z1000.txt']
@@ -75,12 +68,6 @@ def calculate_median_deviations(coordinates_3d):
     """
     Рассчитывает для каждой частицы медианное положение, отклонения от него,
     максимальное и среднее отклонение.
-
-    Параметры:
-    coordinates_3d: трехмерный массив координат [время, частицы, xyz]
-
-    Возвращает:
-    dict: словарь с результатами расчетов
     """
     if coordinates_3d is None:
         print("Ошибка: Нет данных для расчета")
@@ -96,37 +83,26 @@ def calculate_median_deviations(coordinates_3d):
     # 1. Рассчитываем медианное положение для каждой частицы
     print(f"Расчет медианных положений для {n_particles} частиц...")
 
-    # Медиана по временной оси (axis=0)
     median_positions = np.median(coordinates_3d, axis=0)  # Форма: [частицы, 3]
 
-    print(f"Медианные положения рассчитаны. Форма: {median_positions.shape}")
-    print(f"Пример для первых 5 частиц:")
-    for i in range(min(5, n_particles)):
-        print(
-            f"  Частица {i}: X={median_positions[i, 0]:.4f}, Y={median_positions[i, 1]:.4f}, Z={median_positions[i, 2]:.4f}")
-
     # 2. Рассчитываем отклонения от медианного положения
-    print(f"\nРасчет отклонений для {n_timesteps} временных шагов...")
+    print(f"Расчет отклонений для {n_timesteps} временных шагов...")
 
-    # Создаем массив отклонений
     deviations = np.zeros_like(coordinates_3d)
 
-    # Для каждой частицы вычитаем ее медианное положение из всех временных точек
     for particle_idx in range(n_particles):
-        # Вычитаем медианное положение частицы из всех ее временных точек
         deviations[:, particle_idx, :] = coordinates_3d[:, particle_idx, :] - median_positions[particle_idx, :]
 
     # 3. Рассчитываем расстояния (евклидовы нормы) отклонений
-    print(f"\nРасчет расстояний отклонений...")
+    print(f"Расчет расстояний отклонений...")
 
-    # Евклидова норма для каждого отклонения
     deviation_distances = np.linalg.norm(deviations, axis=2)  # Форма: [время, частицы]
 
-    # 4. Рассчитываем максимальное и среднее отклонение для каждой частицы
-    max_deviations = np.max(deviation_distances, axis=0)  # Максимум по времени
-    mean_deviations = np.mean(deviation_distances, axis=0)  # Среднее по времени
+    # 4. Рассчитываем статистики для каждой частицы
+    max_deviations = np.max(deviation_distances, axis=0)
+    mean_deviations = np.mean(deviation_distances, axis=0)
 
-    # 5. Рассчитываем также отдельно для каждой координаты
+    # Для каждой координаты отдельно
     max_x_deviations = np.max(np.abs(deviations[:, :, 0]), axis=0)
     max_y_deviations = np.max(np.abs(deviations[:, :, 1]), axis=0)
     max_z_deviations = np.max(np.abs(deviations[:, :, 2]), axis=0)
@@ -134,13 +110,6 @@ def calculate_median_deviations(coordinates_3d):
     mean_x_deviations = np.mean(np.abs(deviations[:, :, 0]), axis=0)
     mean_y_deviations = np.mean(np.abs(deviations[:, :, 1]), axis=0)
     mean_z_deviations = np.mean(np.abs(deviations[:, :, 2]), axis=0)
-
-    # Статистика по всем частицам
-    print("\nСТАТИСТИКА ОТКЛОНЕНИЙ (по всем частицам):")
-    print(f"  Среднее максимальное отклонение: {np.mean(max_deviations):.6f}")
-    print(f"  Максимальное из максимальных отклонений: {np.max(max_deviations):.6f}")
-    print(f"  Минимальное из максимальных отклонений: {np.min(max_deviations):.6f}")
-    print(f"  Среднее среднее отклонение: {np.mean(mean_deviations):.6f}")
 
     # Собираем все результаты
     results = {
@@ -161,80 +130,12 @@ def calculate_median_deviations(coordinates_3d):
     return results
 
 
-def save_results_to_csv(results, output_path, filename="particle_deviations.csv"):
-    """
-    Сохраняет результаты расчетов в CSV файл.
-
-    Параметры:
-    results: словарь с результатами расчетов
-    output_path: путь для сохранения
-    filename: имя CSV файла
-    """
-    if results is None:
-        print("Нет данных для сохранения")
-        return
-
-    try:
-        # Создаем полный путь
-        full_path = os.path.join(output_path, filename)
-
-        # Создаем DataFrame
-        df = pd.DataFrame({
-            'particle_index': results['particle_indices'],
-            # Медианные положения
-            'median_x': results['median_positions'][:, 0],
-            'median_y': results['median_positions'][:, 1],
-            'median_z': results['median_positions'][:, 2],
-            # Максимальные отклонения
-            'max_deviation': results['max_deviations'],
-            'max_deviation_x': results['max_x_deviations'],
-            'max_deviation_y': results['max_y_deviations'],
-            'max_deviation_z': results['max_z_deviations'],
-            # Средние отклонения
-            'mean_deviation': results['mean_deviations'],
-            'mean_deviation_x': results['mean_x_deviations'],
-            'mean_deviation_y': results['mean_y_deviations'],
-            'mean_deviation_z': results['mean_z_deviations']
-        })
-
-        # Сохраняем в CSV
-        df.to_csv(full_path, index=False, float_format='%.6f')
-
-        print(f"\n" + "=" * 60)
-        print(f"РЕЗУЛЬТАТЫ СОХРАНЕНЫ В CSV ФАЙЛ:")
-        print(f"  Файл: {full_path}")
-        print(f"  Количество строк (частиц): {len(df)}")
-        print(f"  Количество столбцов: {len(df.columns)}")
-        print("\nСтруктура CSV файла:")
-        for i, col in enumerate(df.columns, 1):
-            print(f"  {i:2d}. {col}")
-
-        # Показываем первые несколько строк
-        print("\nПервые 5 строк таблицы:")
-        print(df.head().to_string())
-
-        # Дополнительная статистика
-        print("\nСВОДНАЯ СТАТИСТИКА:")
-        print(df[['max_deviation', 'mean_deviation']].describe().to_string())
-
-        return df
-
-    except Exception as e:
-        print(f"Ошибка при сохранении CSV файла: {e}")
-        return None
-
-
 def plot_deviations(results, output_path, filename_prefix="deviations"):
     """
     Создает графики для визуализации отклонений.
-
-    Параметры:
-    results: словарь с результатами расчетов
-    output_path: путь для сохранения графиков
-    filename_prefix: префикс для имен файлов
     """
     if results is None:
-        return
+        return []
 
     try:
         print(f"\nСоздание графиков...")
@@ -325,10 +226,314 @@ def plot_deviations(results, output_path, filename_prefix="deviations"):
         plt.savefig(coords_path, dpi=150, bbox_inches='tight')
         print(f"  Графики по координатам сохранены: {coords_path}")
 
+        # 4. Дополнительный график: сравнение максимальных и средних отклонений
+        plt.figure(figsize=(10, 6))
+
+        # Сортируем частицы по максимальному отклонению для красивого графика
+        sorted_indices = np.argsort(results['max_deviations'])
+        sorted_max = results['max_deviations'][sorted_indices]
+        sorted_mean = results['mean_deviations'][sorted_indices]
+
+        plt.plot(sorted_max, label='Максимальные отклонения', linewidth=2)
+        plt.plot(sorted_mean, label='Средние отклонения', linewidth=2)
+        plt.xlabel('Частицы (отсортированы по макс. отклонению)')
+        plt.ylabel('Отклонение')
+        plt.title('Сравнение максимальных и средних отклонений')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+
+        comparison_path = os.path.join(output_path, f"{filename_prefix}_comparison.png")
+        plt.savefig(comparison_path, dpi=150, bbox_inches='tight')
+        print(f"  График сравнения сохранен: {comparison_path}")
+
         plt.close('all')
+
+        return [hist_path, scatter_path, coords_path, comparison_path]
 
     except Exception as e:
         print(f"Ошибка при создании графиков: {e}")
+        return []
+
+
+def save_results_to_csv(results, output_path, filename="particle_deviations.csv"):
+    """
+    Сохраняет результаты расчетов в один CSV файл с правильной обработкой текста.
+    """
+    if results is None:
+        print("Нет данных для сохранения")
+        return None, None, None
+
+    try:
+        print(f"\n" + "=" * 60)
+        print(f"СОХРАНЕНИЕ РЕЗУЛЬТАТОВ В CSV ФАЙЛ")
+        print("=" * 60)
+
+        n_particles = len(results['particle_indices'])
+
+        # Создаем полный путь
+        full_path = os.path.join(output_path, filename)
+
+        # Открываем файл с правильными параметрами
+        with open(full_path, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.writer(f)
+
+            # Заголовок файла
+            writer.writerow(["АНАЛИЗ ОТКЛОНЕНИЙ ЧАСТИЦ ОТ МЕДИАННОГО ПОЛОЖЕНИЯ"])
+            writer.writerow([f"Дата анализа: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}"])
+            writer.writerow([f"Количество частиц: {n_particles}"])
+            writer.writerow([])  # Пустая строка
+
+            # Раздел 1: Статистика по всем частицам
+            writer.writerow(["ОБЩАЯ СТАТИСТИКА"])
+            writer.writerow(["Параметр", "Значение", "Примечание"])
+            writer.writerow(
+                ["Среднее максимальное отклонение", f"{np.mean(results['max_deviations']):.6f}", "По всем частицам"])
+            writer.writerow(
+                ["Максимальное отклонение", f"{np.max(results['max_deviations']):.6f}", "Наибольшее значение"])
+            writer.writerow(
+                ["Минимальное отклонение", f"{np.min(results['max_deviations']):.6f}", "Наименьшее значение"])
+            writer.writerow(
+                ["Среднее среднее отклонение", f"{np.mean(results['mean_deviations']):.6f}", "По всем частицам"])
+            writer.writerow(
+                ["Среднее по X", f"{np.mean(results['max_x_deviations']):.6f}", "Макс. отклонения по оси X"])
+            writer.writerow(
+                ["Среднее по Y", f"{np.mean(results['max_y_deviations']):.6f}", "Макс. отклонения по оси Y"])
+            writer.writerow(
+                ["Среднее по Z", f"{np.mean(results['max_z_deviations']):.6f}", "Макс. отклонения по оси Z"])
+            writer.writerow([])  # Пустая строка
+
+            # Раздел 2: Топ-10 частиц с наибольшими отклонениями
+            writer.writerow(["ТОП-10 ЧАСТИЦ С НАИБОЛЬШИМИ ОТКЛОНЕНИЯМИ"])
+            writer.writerow(
+                ["Ранг", "ID частицы", "Макс. отклонение", "Ср. отклонение", "Медиана X", "Медиана Y", "Медиана Z"])
+
+            # Находим индексы топ-10 частиц по максимальным отклонениям
+            top10_indices = np.argsort(results['max_deviations'])[-10:][::-1]
+
+            for rank, idx in enumerate(top10_indices, 1):
+                writer.writerow([
+                    rank,
+                    idx,
+                    f"{results['max_deviations'][idx]:.6f}",
+                    f"{results['mean_deviations'][idx]:.6f}",
+                    f"{results['median_positions'][idx, 0]:.6f}",
+                    f"{results['median_positions'][idx, 1]:.6f}",
+                    f"{results['median_positions'][idx, 2]:.6f}"
+                ])
+
+            writer.writerow([])  # Пустая строка
+
+            # Раздел 3: Полная таблица данных по всем частицам
+            writer.writerow(["ПОЛНЫЕ ДАННЫЕ ПО ВСЕМ ЧАСТИЦАМ"])
+            writer.writerow(["ID", "Медиана X", "Медиана Y", "Медиана Z",
+                             "Макс. откл.", "Ср. откл.",
+                             "Макс. X", "Макс. Y", "Макс. Z",
+                             "Ср. X", "Ср. Y", "Ср. Z"])
+
+            # Добавляем данные для каждой частицы
+            for i in range(n_particles):
+                writer.writerow([
+                    i,
+                    f"{results['median_positions'][i, 0]:.6f}",
+                    f"{results['median_positions'][i, 1]:.6f}",
+                    f"{results['median_positions'][i, 2]:.6f}",
+                    f"{results['max_deviations'][i]:.6f}",
+                    f"{results['mean_deviations'][i]:.6f}",
+                    f"{results['max_x_deviations'][i]:.6f}",
+                    f"{results['max_y_deviations'][i]:.6f}",
+                    f"{results['max_z_deviations'][i]:.6f}",
+                    f"{results['mean_x_deviations'][i]:.6f}",
+                    f"{results['mean_y_deviations'][i]:.6f}",
+                    f"{results['mean_z_deviations'][i]:.6f}"
+                ])
+
+        print(f"CSV файл сохранен: {full_path}")
+
+        # Проверяем и показываем содержимое файла
+        print("\nПРОВЕРКА СОХРАНЕННОГО ФАЙЛА:")
+        print("-" * 80)
+
+        with open(full_path, 'r', encoding='utf-8-sig') as f:
+            lines = f.readlines()
+            print(f"Всего строк в файле: {len(lines)}")
+            print("\nПервые 20 строк файла:")
+            for i, line in enumerate(lines[:20]):
+                print(f"{i + 1:3d}: {line.strip()}")
+
+        print("-" * 80)
+
+        # Альтернативный вариант: использование pandas для создания CSV
+        print("\nАЛЬТЕРНАТИВНЫЙ ВАРИАНТ (используя pandas):")
+
+        # Создаем DataFrame для основной таблицы данных
+        data_for_df = []
+        for i in range(n_particles):
+            data_for_df.append({
+                'ID': i,
+                'Median_X': results['median_positions'][i, 0],
+                'Median_Y': results['median_positions'][i, 1],
+                'Median_Z': results['median_positions'][i, 2],
+                'Max_Deviation': results['max_deviations'][i],
+                'Mean_Deviation': results['mean_deviations'][i],
+                'Max_X': results['max_x_deviations'][i],
+                'Max_Y': results['max_y_deviations'][i],
+                'Max_Z': results['max_z_deviations'][i],
+                'Mean_X': results['mean_x_deviations'][i],
+                'Mean_Y': results['mean_y_deviations'][i],
+                'Mean_Z': results['mean_z_deviations'][i]
+            })
+
+        df = pd.DataFrame(data_for_df)
+
+        # Сохраняем DataFrame в CSV
+        pandas_csv_path = os.path.join(output_path, "particle_data_clean.csv")
+        df.to_csv(pandas_csv_path, index=False, float_format='%.6f', encoding='utf-8-sig')
+
+        print(f"CSV созданный через pandas: {pandas_csv_path}")
+        print(f"Размер таблицы: {df.shape[0]} строк × {df.shape[1]} столбцов")
+        print("\nПервые 5 строк таблицы:")
+        print(df.head().to_string())
+
+        # Создаем отдельный файл со статистикой
+        stats_data = {
+            'Parameter': [
+                'Total Particles',
+                'Mean Max Deviation',
+                'Max Deviation',
+                'Min Deviation',
+                'Mean Mean Deviation',
+                'Mean Max X',
+                'Mean Max Y',
+                'Mean Max Z'
+            ],
+            'Value': [
+                n_particles,
+                f"{np.mean(results['max_deviations']):.6f}",
+                f"{np.max(results['max_deviations']):.6f}",
+                f"{np.min(results['max_deviations']):.6f}",
+                f"{np.mean(results['mean_deviations']):.6f}",
+                f"{np.mean(results['max_x_deviations']):.6f}",
+                f"{np.mean(results['max_y_deviations']):.6f}",
+                f"{np.mean(results['max_z_deviations']):.6f}"
+            ],
+            'Description': [
+                'Total number of particles analyzed',
+                'Average of maximum deviations across all particles',
+                'Largest maximum deviation found',
+                'Smallest maximum deviation found',
+                'Average of mean deviations across all particles',
+                'Average of maximum X deviations',
+                'Average of maximum Y deviations',
+                'Average of maximum Z deviations'
+            ]
+        }
+
+        stats_df = pd.DataFrame(stats_data)
+        stats_csv_path = os.path.join(output_path, "statistics_summary.csv")
+        stats_df.to_csv(stats_csv_path, index=False, encoding='utf-8-sig')
+
+        print(f"\nФайл со статистикой: {stats_csv_path}")
+
+        return full_path, pandas_csv_path, stats_csv_path
+
+    except Exception as e:
+        print(f"Ошибка при сохранении CSV файла: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None, None
+
+
+def save_simple_csv(results, output_path, filename="particle_results_simple.csv"):
+    """
+    Сохраняет результаты в простом CSV формате без русских символов.
+    """
+    try:
+        n_particles = len(results['particle_indices'])
+
+        # Создаем DataFrame с английскими заголовками
+        data = []
+        for i in range(n_particles):
+            data.append({
+                'Particle_ID': i,
+                'Median_X': f"{results['median_positions'][i, 0]:.6f}",
+                'Median_Y': f"{results['median_positions'][i, 1]:.6f}",
+                'Median_Z': f"{results['median_positions'][i, 2]:.6f}",
+                'Max_Deviation': f"{results['max_deviations'][i]:.6f}",
+                'Mean_Deviation': f"{results['mean_deviations'][i]:.6f}",
+                'Max_X_Dev': f"{results['max_x_deviations'][i]:.6f}",
+                'Max_Y_Dev': f"{results['max_y_deviations'][i]:.6f}",
+                'Max_Z_Dev': f"{results['max_z_deviations'][i]:.6f}",
+                'Mean_X_Dev': f"{results['mean_x_deviations'][i]:.6f}",
+                'Mean_Y_Dev': f"{results['mean_y_deviations'][i]:.6f}",
+                'Mean_Z_Dev': f"{results['mean_z_deviations'][i]:.6f}"
+            })
+
+        df = pd.DataFrame(data)
+
+        # Сохраняем в CSV
+        full_path = os.path.join(output_path, filename)
+        df.to_csv(full_path, index=False, encoding='utf-8')
+
+        print(f"\nПростой CSV файл сохранен: {full_path}")
+        print("Структура файла:")
+        print(f"Количество строк: {len(df)}")
+        print(f"Количество столбцов: {len(df.columns)}")
+        print("\nЗаголовки столбцов:")
+        for i, col in enumerate(df.columns, 1):
+            print(f"{i:2d}. {col}")
+
+        return full_path
+
+    except Exception as e:
+        print(f"Ошибка при сохранении простого CSV: {e}")
+        return None
+
+
+def save_csv_with_excel_compatibility(results, output_path, filename="particle_results_excel.csv"):
+    """
+    Сохраняет CSV файл с максимальной совместимостью с Excel.
+    """
+    try:
+        full_path = os.path.join(output_path, filename)
+
+        with open(full_path, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+
+            # Записываем заголовки
+            headers = [
+                "Particle ID", "Median X", "Median Y", "Median Z",
+                "Maximum Deviation", "Mean Deviation",
+                "Max X Dev", "Max Y Dev", "Max Z Dev",
+                "Mean X Dev", "Mean Y Dev", "Mean Z Dev"
+            ]
+            writer.writerow(headers)
+
+            # Записываем данные
+            for i in range(len(results['particle_indices'])):
+                row = [
+                    i,
+                    results['median_positions'][i, 0],
+                    results['median_positions'][i, 1],
+                    results['median_positions'][i, 2],
+                    results['max_deviations'][i],
+                    results['mean_deviations'][i],
+                    results['max_x_deviations'][i],
+                    results['max_y_deviations'][i],
+                    results['max_z_deviations'][i],
+                    results['mean_x_deviations'][i],
+                    results['mean_y_deviations'][i],
+                    results['mean_z_deviations'][i]
+                ]
+                writer.writerow(row)
+
+        print(f"\nCSV файл для Excel сохранен: {full_path}")
+        print("Этот файл должен корректно открываться в Microsoft Excel.")
+
+        return full_path
+
+    except Exception as e:
+        print(f"Ошибка при сохранении CSV для Excel: {e}")
+        return None
 
 
 def main():
@@ -336,7 +541,7 @@ def main():
     Основная функция программы.
     """
     # Укажите путь к папке с файлами
-    path = "C:/Users/17.3 Active Systems/Downloads/3Д/3Д"
+    path = "C:/Users/17.3 Active Systems/Downloads/3Д/3Д"  # ЗАМЕНИТЕ НА ВАШ ПУТЬ!
 
     print("=" * 70)
     print("АНАЛИЗ КООРДИНАТ ЧАСТИЦ")
@@ -356,103 +561,127 @@ def main():
         print("Не удалось рассчитать отклонения. Завершение работы.")
         return
 
-    # 3. Сохранение результатов в CSV
-    df = save_results_to_csv(results, path)
+    # 3. Сохранение результатов в разные форматы CSV
+    print("\n" + "=" * 70)
+    print("СОЗДАНИЕ CSV ФАЙЛОВ")
+    print("=" * 70)
+
+    # Вариант 1: Детальный CSV с русским текстом
+    csv_file1, csv_file2, csv_file3 = save_results_to_csv(results, path)
+
+    # Вариант 2: Простой CSV с английскими заголовками
+    simple_csv = save_simple_csv(results, path)
+
+    # Вариант 3: CSV с совместимостью для Excel
+    excel_csv = save_csv_with_excel_compatibility(results, path)
 
     # 4. Создание графиков
-    plot_deviations(results, path)
-
-    # 5. Дополнительный анализ
-    print("\n" + "=" * 60)
-    print("ДОПОЛНИТЕЛЬНЫЙ АНАЛИЗ")
-    print("=" * 60)
-
-    # Находим частицы с наибольшими отклонениями
-    if df is not None:
-        # Топ-10 частиц с наибольшими максимальными отклонениями
-        top10_max = df.nlargest(10, 'max_deviation')[['particle_index', 'max_deviation']]
-        print("\nТоп-10 частиц с наибольшими максимальными отклонениями:")
-        print(top10_max.to_string(index=False))
-
-        # Топ-10 частиц с наибольшими средними отклонениями
-        top10_mean = df.nlargest(10, 'mean_deviation')[['particle_index', 'mean_deviation']]
-        print("\nТоп-10 частиц с наибольшими средними отклонениями:")
-        print(top10_mean.to_string(index=False))
-
-        # Сохраняем топы в отдельные файлы
-        top10_max.to_csv(os.path.join(path, "top10_max_deviations.csv"), index=False)
-        top10_mean.to_csv(os.path.join(path, "top10_mean_deviations.csv"), index=False)
-        print(f"\nТоп-10 списки сохранены в папке {path}")
+    plot_files = plot_deviations(results, path)
 
     print("\n" + "=" * 70)
     print("АНАЛИЗ ЗАВЕРШЕН УСПЕШНО!")
     print("=" * 70)
 
+    # Сводка созданных файлов
+    print("\nСОЗДАННЫЕ ФАЙЛЫ:")
+    files_created = []
 
-def quick_analysis(path):
+    if csv_file1:
+        files_created.append(("Детальный CSV (русский текст)", csv_file1))
+    if csv_file2:
+        files_created.append(("Чистые данные (pandas)", csv_file2))
+    if csv_file3:
+        files_created.append(("Статистика", csv_file3))
+    if simple_csv:
+        files_created.append(("Простой CSV", simple_csv))
+    if excel_csv:
+        files_created.append(("CSV для Excel", excel_csv))
+
+    for i, (desc, filepath) in enumerate(files_created, 1):
+        print(f"{i}. {desc}: {os.path.basename(filepath)}")
+
+    if plot_files:
+        print(f"\nГрафики (PNG):")
+        for i, plot_file in enumerate(plot_files, 1):
+            print(f"{i}. {os.path.basename(plot_file)}")
+
+    # Краткая статистика
+    print("\nКРАТКАЯ СТАТИСТИКА:")
+    print(f"• Проанализировано частиц: {len(results['particle_indices'])}")
+    print(f"• Среднее макс. отклонение: {np.mean(results['max_deviations']):.4f}")
+    print(f"• Среднее среднее отклонение: {np.mean(results['mean_deviations']):.4f}")
+
+    # Находим частицу с максимальным отклонением
+    max_idx = np.argmax(results['max_deviations'])
+    print(f"• Частица с наибольшим отклонением: ID={max_idx}, отклонение={results['max_deviations'][max_idx]:.4f}")
+
+
+def check_csv_encoding(filepath):
     """
-    Быстрый анализ для тех, кому нужен только CSV файл.
-
-    Параметры:
-    path: путь к папке с файлами
+    Проверяет кодировку CSV файла.
     """
-    print(f"\nБыстрый анализ данных из {path}")
+    try:
+        # Пробуем разные кодировки
+        encodings = ['utf-8', 'utf-8-sig', 'cp1251', 'iso-8859-1', 'windows-1251']
 
-    # Чтение данных
-    _, _, _, coords_3d = read_coordinates_from_path(path)
+        for encoding in encodings:
+            try:
+                with open(filepath, 'r', encoding=encoding) as f:
+                    content = f.read(1024)  # Читаем первые 1024 символа
+                    print(f"\nПроверка кодировки {encoding}: УСПЕХ")
+                    print(f"Первые 100 символов: {content[:100]}")
+                    return encoding
+            except UnicodeDecodeError:
+                print(f"Проверка кодировки {encoding}: ОШИБКА")
 
-    if coords_3d is None:
-        return
+        print("\nНе удалось определить кодировку файла.")
+        return None
 
-    # Расчет отклонений
-    results = calculate_median_deviations(coords_3d)
-
-    if results is None:
-        return
-
-    # Сохранение в CSV
-    save_results_to_csv(results, path)
-
-    print(f"\nБыстрый анализ завершен. Результаты в {path}/particle_deviations.csv")
+    except Exception as e:
+        print(f"Ошибка при проверке кодировки: {e}")
+        return None
 
 
 if __name__ == "__main__":
     # Укажите путь к вашей папке
-    path = "C:/Users/17.3 Active Systems/Downloads/3Д/3Д"
+    path = "C:/Users/17.3 Active Systems/Downloads/3Д/3Д"  # ЗАМЕНИТЕ НА ВАШ ПУТЬ!
 
     # Проверяем существование папки
     if not os.path.exists(path):
         print(f"Папка {path} не существует!")
-        print("Создаем тестовые данные для демонстрации...")
 
-        os.makedirs(path, exist_ok=True)
+        # Создаем тестовые данные
+        n_timesteps = 50
+        n_particles = 20
 
-        # Создаем тестовые данные с разными отклонениями
-        n_timesteps = 100
-        n_particles = 1000
-
-        # Создаем данные с разным уровнем "шума" для разных частиц
-        np.random.seed(42)  # Для воспроизводимости
+        np.random.seed(42)
 
         x_data = np.zeros((n_timesteps, n_particles))
         y_data = np.zeros((n_timesteps, n_particles))
         z_data = np.zeros((n_timesteps, n_particles))
 
         for i in range(n_particles):
-            # Увеличиваем амплитуду отклонений для некоторых частиц
-            amplitude = 0.1 + 0.9 * (i / n_particles)  # Линейный рост от 0.1 до 1.0
+            amplitude = 0.5 + 1.0 * (i / n_particles)
             x_data[:, i] = np.random.randn(n_timesteps) * amplitude
             y_data[:, i] = np.random.randn(n_timesteps) * amplitude * 0.8
             z_data[:, i] = np.random.randn(n_timesteps) * amplitude * 1.2
 
+        os.makedirs(path, exist_ok=True)
         np.savetxt(os.path.join(path, 'X1000.txt'), x_data)
         np.savetxt(os.path.join(path, 'Y1000.txt'), y_data)
         np.savetxt(os.path.join(path, 'Z1000.txt'), z_data)
 
         print(f"Тестовые файлы созданы в {path}")
 
-    # Полный анализ (с графиками)
+    # Полный анализ
     main()
 
-    # Или быстрый анализ (только CSV)
-    # quick_analysis(path)
+    # Проверка кодировки файлов (опционально)
+    print("\n" + "=" * 70)
+    print("ПРОВЕРКА КОДИРОВОК ФАЙЛОВ (опционально)")
+    print("=" * 70)
+
+    csv_files = [f for f in os.listdir(path) if f.endswith('.csv')]
+    for csv_file in csv_files[:3]:  # Проверяем только первые 3 файла
+        print(f"\nПроверка файла: {csv_file}")
+        check_csv_encoding(os.path.join(path, csv_file))
