@@ -1,0 +1,1090 @@
+import numpy as np
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+import csv
+from scipy import stats, linalg, spatial
+from mpl_toolkits.mplot3d import Axes3D
+
+# МАСШТАБ: 20 микрометров на пиксель
+SCALE = 20.0  # микрометров/пиксель
+
+
+def read_coordinates_from_path(path, filenames=None, delimiter=None):
+    """
+    Считывает координаты частиц из файлов в указанной папке.
+    Возвращает координаты в микрометрах (с учетом масштаба).
+    """
+    if filenames is None:
+        filenames = ['X1000.txt', 'Y1000.txt', 'Z1000.txt']
+
+    try:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Папка {path} не существует")
+
+        filepaths = [os.path.join(path, fname) for fname in filenames]
+
+        print(f"Чтение файлов из папки: {path}")
+        print(f"Используемый масштаб: {SCALE} мкм/пиксель")
+
+        for fpath, fname in zip(filepaths, filenames):
+            if not os.path.exists(fpath):
+                raise FileNotFoundError(f"Файл {fname} не найден в папке {path}")
+
+        if delimiter:
+            x_data = np.loadtxt(filepaths[0], delimiter=delimiter)
+            y_data = np.loadtxt(filepaths[1], delimiter=delimiter)
+            z_data = np.loadtxt(filepaths[2], delimiter=delimiter)
+        else:
+            x_data = np.loadtxt(filepaths[0])
+            y_data = np.loadtxt(filepaths[1])
+            z_data = np.loadtxt(filepaths[2])
+
+        # Применяем масштаб для перевода в микрометры
+        x_data_microns = x_data * SCALE
+        y_data_microns = y_data * SCALE
+        z_data_microns = z_data * SCALE
+
+        print(f"\nИсходные размеры файлов (в пикселях):")
+        print(f"  {filenames[0]}: {x_data.shape} (временные шаги={x_data.shape[0]}, частицы={x_data.shape[1]})")
+        print(f"  {filenames[1]}: {y_data.shape}")
+        print(f"  {filenames[2]}: {z_data.shape}")
+
+        print(f"\nПосле масштабирования (в микрометрах):")
+        print(f"  Диапазон X: {x_data_microns.min():.2f} - {x_data_microns.max():.2f} мкм")
+        print(f"  Диапазон Y: {y_data_microns.min():.2f} - {y_data_microns.max():.2f} мкм")
+        print(f"  Диапазон Z: {z_data_microns.min():.2f} - {z_data_microns.max():.2f} мкм")
+
+        if not (x_data.shape == y_data.shape == z_data.shape):
+            print("\nПредупреждение: Размеры файлов не совпадают!")
+            min_rows = min(x_data.shape[0], y_data.shape[0], z_data.shape[0])
+            min_cols = min(x_data.shape[1], y_data.shape[1], z_data.shape[1])
+
+            x_data_microns = x_data_microns[:min_rows, :min_cols]
+            y_data_microns = y_data_microns[:min_rows, :min_cols]
+            z_data_microns = z_data_microns[:min_rows, :min_cols]
+            print(f"Используется общий размер: ({min_rows}, {min_cols})")
+
+        coordinates_3d = np.zeros((x_data_microns.shape[0], x_data_microns.shape[1], 3))
+        coordinates_3d[:, :, 0] = x_data_microns
+        coordinates_3d[:, :, 1] = y_data_microns
+        coordinates_3d[:, :, 2] = z_data_microns
+
+        print(f"\nСоздан 3D массив координат в микрометрах: {coordinates_3d.shape}")
+        print(f"  Временных шагов: {coordinates_3d.shape[0]}")
+        print(f"  Частиц: {coordinates_3d.shape[1]}")
+        print(f"  Единицы измерения: микрометры (мкм)")
+
+        # Возвращаем как исходные данные в пикселях, так и масштабированные
+        return x_data, y_data, z_data, coordinates_3d
+
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        return None, None, None, None
+
+
+def scale_to_microns(value_pixels, value_name="значение"):
+    """
+    Переводит значение из пикселей в микрометры.
+
+    Параметры:
+    value_pixels: значение в пикселях (может быть числом или массивом)
+    value_name: название значения для информационного вывода
+
+    Возвращает:
+    Значение в микрометрах
+    """
+    if isinstance(value_pixels, (int, float, np.number)):
+        value_microns = value_pixels * SCALE
+        print(f"  {value_name}: {value_pixels:.2f} пикс = {value_microns:.2f} мкм")
+        return value_microns
+    else:
+        # Для массивов
+        return value_pixels * SCALE
+
+
+def calculate_median_deviations(coordinates_3d):
+    """
+    Рассчитывает для каждой частицы медианное положение, отклонения от него,
+    максимальное и среднее отклонение.
+    Все значения в микрометрах.
+    """
+    if coordinates_3d is None:
+        print("Ошибка: Нет данных для расчета")
+        return None
+
+    print("\n" + "=" * 60)
+    print("РАСЧЕТ МЕДИАННЫХ ПОЛОЖЕНИЙ И ОТКЛОНЕНИЙ")
+    print("=" * 60)
+    print(f"Все расчеты в микрометрах (масштаб: {SCALE} мкм/пиксель)")
+
+    n_particles = coordinates_3d.shape[1]
+    n_timesteps = coordinates_3d.shape[0]
+
+    print(f"Расчет медианных положений для {n_particles} частиц...")
+
+    median_positions = np.median(coordinates_3d, axis=0)  # Форма: [частицы, 3]
+
+    print(f"Расчет отклонений для {n_timesteps} временных шагов...")
+
+    deviations = np.zeros_like(coordinates_3d)
+
+    for particle_idx in range(n_particles):
+        deviations[:, particle_idx, :] = coordinates_3d[:, particle_idx, :] - median_positions[particle_idx, :]
+
+    print(f"Расчет расстояний отклонений...")
+
+    deviation_distances = np.linalg.norm(deviations, axis=2)  # Форма: [время, частицы]
+
+    max_deviations = np.max(deviation_distances, axis=0)
+    mean_deviations = np.mean(deviation_distances, axis=0)
+
+    max_x_deviations = np.max(np.abs(deviations[:, :, 0]), axis=0)
+    max_y_deviations = np.max(np.abs(deviations[:, :, 1]), axis=0)
+    max_z_deviations = np.max(np.abs(deviations[:, :, 2]), axis=0)
+
+    mean_x_deviations = np.mean(np.abs(deviations[:, :, 0]), axis=0)
+    mean_y_deviations = np.mean(np.abs(deviations[:, :, 1]), axis=0)
+    mean_z_deviations = np.mean(np.abs(deviations[:, :, 2]), axis=0)
+
+    results = {
+        'median_positions': median_positions,
+        'deviations': deviations,
+        'deviation_distances': deviation_distances,
+        'max_deviations': max_deviations,
+        'mean_deviations': mean_deviations,
+        'max_x_deviations': max_x_deviations,
+        'max_y_deviations': max_y_deviations,
+        'max_z_deviations': max_z_deviations,
+        'mean_x_deviations': mean_x_deviations,
+        'mean_y_deviations': mean_y_deviations,
+        'mean_z_deviations': mean_z_deviations,
+        'particle_indices': np.arange(n_particles),
+        'coordinates_3d': coordinates_3d,
+        'units': 'microns'
+    }
+
+    print(f"\nПример медианных положений (первые 3 частицы, в микрометрах):")
+    for i in range(min(3, n_particles)):
+        print(
+            f"  Частица {i}: X={median_positions[i, 0]:.2f}, Y={median_positions[i, 1]:.2f}, Z={median_positions[i, 2]:.2f} мкм")
+
+    print(f"\nСтатистика отклонений (в микрометрах):")
+    print(f"  Среднее максимальное отклонение: {np.mean(max_deviations):.2f} мкм")
+    print(f"  Среднее среднее отклонение: {np.mean(mean_deviations):.2f} мкм")
+
+    return results
+
+
+def calculate_interparticle_distances(coordinates_3d):
+    """
+    Рассчитывает СРЕДНИЕ ПО ВРЕМЕНИ расстояния между соседними частицами.
+    Все расстояния в микрометрах.
+    """
+    print("\n" + "=" * 60)
+    print("РАСЧЕТ СРЕДНИХ ПО ВРЕМЕНИ РАССТОЯНИЙ МЕЖДУ СОСЕДНИМИ ЧАСТИЦАМИ")
+    print("=" * 60)
+    print(f"Все расстояния в микрометрах (масштаб: {SCALE} мкм/пиксель)")
+
+    n_timesteps = coordinates_3d.shape[0]
+    n_particles = coordinates_3d.shape[1]
+
+    print(f"Расчет для {n_particles} частиц по {n_timesteps} временным шагам...")
+    print(f"Будет рассчитано СРЕДНЕЕ расстояние по времени для каждой пары соседей")
+
+    print("\n1. Расчет расстояний для каждого момента времени...")
+    neighbor_distances_all_time = np.zeros((n_timesteps, n_particles - 1))
+
+    for t in range(n_timesteps):
+        for i in range(n_particles - 1):
+            dist = np.linalg.norm(coordinates_3d[t, i, :] - coordinates_3d[t, i + 1, :])
+            neighbor_distances_all_time[t, i] = dist
+
+    print("2. Усреднение по времени...")
+
+    mean_neighbor_distances = np.mean(neighbor_distances_all_time, axis=0)
+    std_neighbor_distances = np.std(neighbor_distances_all_time, axis=0)
+    max_neighbor_distances = np.max(neighbor_distances_all_time, axis=0)
+    min_neighbor_distances = np.min(neighbor_distances_all_time, axis=0)
+
+    print("3. Расчет статистики для каждой частицы...")
+
+    particle_stats = []
+    for i in range(n_particles):
+        stats_dict = {'particle_id': i}
+
+        if i == 0:
+            stats_dict['has_left'] = False
+            stats_dict['has_right'] = True
+
+            mean_dist_right = mean_neighbor_distances[i]
+            std_dist_right = std_neighbor_distances[i]
+            max_dist_right = max_neighbor_distances[i]
+            min_dist_right = min_neighbor_distances[i]
+
+            stats_dict['right_mean'] = mean_dist_right
+            stats_dict['right_std'] = std_dist_right
+            stats_dict['right_max'] = max_dist_right
+            stats_dict['right_min'] = min_dist_right
+
+            stats_dict['overall_mean'] = mean_dist_right
+            stats_dict['overall_std'] = std_dist_right
+            stats_dict['overall_max'] = max_dist_right
+            stats_dict['overall_min'] = min_dist_right
+
+        elif i == n_particles - 1:
+            stats_dict['has_left'] = True
+            stats_dict['has_right'] = False
+
+            mean_dist_left = mean_neighbor_distances[i - 1]
+            std_dist_left = std_neighbor_distances[i - 1]
+            max_dist_left = max_neighbor_distances[i - 1]
+            min_dist_left = min_neighbor_distances[i - 1]
+
+            stats_dict['left_mean'] = mean_dist_left
+            stats_dict['left_std'] = std_dist_left
+            stats_dict['left_max'] = max_dist_left
+            stats_dict['left_min'] = min_dist_left
+
+            stats_dict['overall_mean'] = mean_dist_left
+            stats_dict['overall_std'] = std_dist_left
+            stats_dict['overall_max'] = max_dist_left
+            stats_dict['overall_min'] = min_dist_left
+
+        else:
+            stats_dict['has_left'] = True
+            stats_dict['has_right'] = True
+
+            mean_dist_left = mean_neighbor_distances[i - 1]
+            std_dist_left = std_neighbor_distances[i - 1]
+            max_dist_left = max_neighbor_distances[i - 1]
+            min_dist_left = min_neighbor_distances[i - 1]
+
+            mean_dist_right = mean_neighbor_distances[i]
+            std_dist_right = std_neighbor_distances[i]
+            max_dist_right = max_neighbor_distances[i]
+            min_dist_right = min_neighbor_distances[i]
+
+            stats_dict['left_mean'] = mean_dist_left
+            stats_dict['left_std'] = std_dist_left
+            stats_dict['left_max'] = max_dist_left
+            stats_dict['left_min'] = min_dist_left
+
+            stats_dict['right_mean'] = mean_dist_right
+            stats_dict['right_std'] = std_dist_right
+            stats_dict['right_max'] = max_dist_right
+            stats_dict['right_min'] = min_dist_right
+
+            stats_dict['overall_mean'] = (mean_dist_left + mean_dist_right) / 2
+            stats_dict['overall_std'] = (std_dist_left + std_dist_right) / 2
+            stats_dict['overall_max'] = max(max_dist_left, max_dist_right)
+            stats_dict['overall_min'] = min(min_dist_left, min_dist_right)
+
+        particle_stats.append(stats_dict)
+
+    print("4. Расчет статистики по парам соседей...")
+
+    pair_stats = []
+    for i in range(n_particles - 1):
+        pair_mean = mean_neighbor_distances[i]
+        pair_std = std_neighbor_distances[i]
+        pair_max = max_neighbor_distances[i]
+        pair_min = min_neighbor_distances[i]
+
+        pair_stats.append({
+            'pair_id': i,
+            'particle1': i,
+            'particle2': i + 1,
+            'mean_distance': pair_mean,
+            'std_distance': pair_std,
+            'max_distance': pair_max,
+            'min_distance': pair_min,
+            'relative_variation': pair_std / pair_mean if pair_mean > 0 else 0,
+            'range': pair_max - pair_min,
+            'midpoint': (pair_max + pair_min) / 2
+        })
+
+    print("5. Расчет общей статистики...")
+
+    overall_mean = np.mean(mean_neighbor_distances)
+    overall_std = np.std(mean_neighbor_distances)
+    overall_max = np.max(mean_neighbor_distances)
+    overall_min = np.min(mean_neighbor_distances)
+    overall_median = np.median(mean_neighbor_distances)
+
+    overall_stats = {
+        'global_mean_of_means': overall_mean,
+        'global_std_of_means': overall_std,
+        'global_max_of_means': overall_max,
+        'global_min_of_means': overall_min,
+        'global_median_of_means': overall_median,
+        'global_q1': np.percentile(mean_neighbor_distances, 25),
+        'global_q3': np.percentile(mean_neighbor_distances, 75),
+        'total_pairs': n_particles - 1,
+        'n_timesteps': n_timesteps,
+        'n_particles': n_particles,
+        'total_mean_std': np.mean(std_neighbor_distances),
+        'total_mean_range': np.mean(max_neighbor_distances - min_neighbor_distances),
+        'scale_microns_per_pixel': SCALE
+    }
+
+    print("6. Расчет временной статистики...")
+
+    time_stats = []
+    for t in range(n_timesteps):
+        dists_at_time = neighbor_distances_all_time[t, :]
+        time_stats.append({
+            'time_step': t,
+            'mean_at_time': np.mean(dists_at_time),
+            'std_at_time': np.std(dists_at_time),
+            'max_at_time': np.max(dists_at_time),
+            'min_at_time': np.min(dists_at_time)
+        })
+
+    results = {
+        'mean_neighbor_distances': mean_neighbor_distances,
+        'std_neighbor_distances': std_neighbor_distances,
+        'max_neighbor_distances': max_neighbor_distances,
+        'min_neighbor_distances': min_neighbor_distances,
+        'neighbor_distances_all_time': neighbor_distances_all_time,
+        'particle_stats': particle_stats,
+        'pair_stats': pair_stats,
+        'time_stats': time_stats,
+        'overall_stats': overall_stats,
+        'n_particles': n_particles,
+        'n_timesteps': n_timesteps,
+        'units': 'microns',
+        'scale': SCALE
+    }
+
+    print(f"\nОБЩАЯ СТАТИСТИКА (СРЕДНИЕ ПО ВРЕМЕНИ, в микрометрах):")
+    print(f"  Всего пар соседей: {n_particles - 1}")
+    print(f"  Временных шагов для усреднения: {n_timesteps}")
+    print(f"  Среднее из средних расстояний: {overall_mean:.2f} мкм")
+    print(f"  Медиана средних расстояний: {overall_median:.2f} мкм")
+    print(f"  Максимальное из средних: {overall_max:.2f} мкм")
+    print(f"  Минимальное из средних: {overall_min:.2f} мкм")
+    print(f"  Стандартное отклонение средних: {overall_std:.2f} мкм")
+    print(f"  Среднее стандартное отклонение по парам: {np.mean(std_neighbor_distances):.2f} мкм")
+    print(f"  Средний размах по парам: {np.mean(max_neighbor_distances - min_neighbor_distances):.2f} мкм")
+
+    print(f"\nПример расстояний (первые 3 пары, в микрометрах):")
+    for i in range(min(3, n_particles - 1)):
+        print(f"  Пара {i} ({i}-{i + 1}): среднее={mean_neighbor_distances[i]:.2f} мкм, "
+              f"стд={std_neighbor_distances[i]:.2f} мкм")
+
+    return results
+
+
+def calculate_axis_line(median_positions):
+    """
+    Рассчитывает ось структуры - аппроксимационную прямую для медианных положений частиц.
+    Все значения в микрометрах.
+    """
+    print("\n" + "=" * 60)
+    print("РАСЧЕТ ОСИ СТРУКТУРЫ")
+    print("=" * 60)
+    print(f"Все расчеты в микрометрах (масштаб: {SCALE} мкм/пиксель)")
+
+    n_particles = median_positions.shape[0]
+
+    centroid = np.mean(median_positions, axis=0)
+    centered_data = median_positions - centroid
+
+    cov_matrix = np.cov(centered_data.T)
+
+    eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+
+    max_eigenvalue_idx = np.argmax(eigenvalues)
+    direction = eigenvectors[:, max_eigenvalue_idx]
+
+    direction = direction / np.linalg.norm(direction)
+
+    t_values = np.dot(centered_data, direction)
+
+    distances = []
+    for point in median_positions:
+        v = point - centroid
+        projection = np.dot(v, direction) * direction
+        perpendicular = v - projection
+        distance = np.linalg.norm(perpendicular)
+        distances.append(distance)
+
+    distances = np.array(distances)
+
+    total_variance = np.var(median_positions, axis=0).sum()
+    explained_variance = eigenvalues[max_eigenvalue_idx]
+    r_squared = explained_variance / total_variance if total_variance > 0 else 0
+
+    equation_parametric = f"x = {centroid[0]:.2f} + {direction[0]:.4f} * t\n" \
+                          f"y = {centroid[1]:.2f} + {direction[1]:.4f} * t\n" \
+                          f"z = {centroid[2]:.2f} + {direction[2]:.4f} * t"
+
+    equation_symmetric = f"(x - {centroid[0]:.2f}) / {direction[0]:.4f} = " \
+                         f"(y - {centroid[1]:.2f}) / {direction[1]:.4f} = " \
+                         f"(z - {centroid[2]:.2f}) / {direction[2]:.4f}"
+
+    t_min = np.min(t_values)
+    t_max = np.max(t_values)
+
+    t_range_extended = np.linspace(t_min - 0.2 * (t_max - t_min),
+                                   t_max + 0.2 * (t_max - t_min), 100)
+
+    line_points = np.array([centroid + t * direction for t in t_range_extended])
+
+    axis_results = {
+        'centroid': centroid,
+        'direction': direction,
+        'eigenvalues': eigenvalues,
+        'eigenvectors': eigenvectors,
+        't_values': t_values,
+        'distances_to_axis': distances,
+        'r_squared': r_squared,
+        'equation_parametric': equation_parametric,
+        'equation_symmetric': equation_symmetric,
+        'line_points': line_points,
+        'mean_distance': np.mean(distances),
+        'max_distance': np.max(distances),
+        'median_distance': np.median(distances),
+        'std_distance': np.std(distances),
+        'units': 'microns',
+        'scale': SCALE
+    }
+
+    print(f"Центр масс: ({centroid[0]:.2f}, {centroid[1]:.2f}, {centroid[2]:.2f}) мкм")
+    print(f"Направляющий вектор: ({direction[0]:.4f}, {direction[1]:.4f}, {direction[2]:.4f})")
+    print(f"\nУравнение прямой (в микрометрах):")
+    print(equation_parametric)
+    print(f"\nКоэффициент детерминации R²: {r_squared:.4f}")
+    print(f"Среднее расстояние до оси: {np.mean(distances):.2f} мкм")
+    print(f"Максимальное расстояние до оси: {np.max(distances):.2f} мкм")
+    print(f"Медианное расстояние до оси: {np.median(distances):.2f} мкм")
+    print(f"Стандартное отклонение расстояний: {np.std(distances):.2f} мкм")
+
+    return axis_results
+
+
+def save_interparticle_distances_to_csv(distances_results, output_path,
+                                        filename="interparticle_distances_mean_microns.csv"):
+    """
+    Сохраняет статистику СРЕДНИХ межчастичных расстояний в CSV файлы.
+    Все значения в микрометрах.
+    """
+    if distances_results is None:
+        print("Нет данных о межчастичных расстояниях для сохранения")
+        return None, None, None, None, None, None
+
+    try:
+        print(f"\n" + "=" * 60)
+        print(f"СОХРАНЕНИЕ СТАТИСТИКИ СРЕДНИХ МЕЖЧАСТИЧНЫХ РАССТОЯНИЙ")
+        print("=" * 60)
+        print(f"Все значения в микрометрах (масштаб: {SCALE} мкм/пиксель)")
+
+        n_particles = distances_results['n_particles']
+        n_timesteps = distances_results['n_timesteps']
+        scale = distances_results.get('scale', SCALE)
+
+        # 1. Основной CSV файл с подробной статистикой
+        full_path = os.path.join(output_path, filename)
+
+        with open(full_path, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.writer(f)
+
+            # Заголовок файла
+            writer.writerow(["СТАТИСТИКА СРЕДНИХ ПО ВРЕМЕНИ РАССТОЯНИЙ МЕЖДУ СОСЕДНИМИ ЧАСТИЦАМИ"])
+            writer.writerow([f"Дата анализа: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}"])
+            writer.writerow([f"Масштаб: {scale} микрометров на пиксель"])
+            writer.writerow([f"Все значения в микрометрах (мкм)"])
+            writer.writerow([f"Количество частиц: {n_particles}"])
+            writer.writerow([f"Количество временных шагов для усреднения: {n_timesteps}"])
+            writer.writerow([f"Количество пар соседей: {n_particles - 1}"])
+            writer.writerow([])  # Пустая строка
+
+            # Раздел: Общая статистика СРЕДНИХ значений
+            writer.writerow(["ОБЩАЯ СТАТИСТИКА (СРЕДНИЕ ПО ВРЕМЕНИ, в микрометрах)"])
+            writer.writerow(["Параметр", "Значение (мкм)", "Описание"])
+
+            stats = distances_results['overall_stats']
+            writer.writerow(["Среднее из средних расстояний",
+                             f"{stats['global_mean_of_means']:.2f}",
+                             "Среднее значение по всем парам (усредненное по времени)"])
+            writer.writerow(["Медиана средних расстояний",
+                             f"{stats['global_median_of_means']:.2f}",
+                             "Медиана средних значений по парам"])
+            writer.writerow(["Максимальное из средних",
+                             f"{stats['global_max_of_means']:.2f}",
+                             "Наибольшее среднее расстояние"])
+            writer.writerow(["Минимальное из средних",
+                             f"{stats['global_min_of_means']:.2f}",
+                             "Наименьшее среднее расстояние"])
+            writer.writerow(["Стандартное отклонение средних",
+                             f"{stats['global_std_of_means']:.2f}",
+                             "Разброс средних значений по парам"])
+            writer.writerow(["Первый квартиль (Q1)",
+                             f"{stats['global_q1']:.2f}",
+                             "25-й процентиль средних значений"])
+            writer.writerow(["Третий квартиль (Q3)",
+                             f"{stats['global_q3']:.2f}",
+                             "75-й процентиль средних значений"])
+            writer.writerow(["Интерквартильный размах",
+                             f"{stats['global_q3'] - stats['global_q1']:.2f}",
+                             "Q3 - Q1 (мера разброса)"])
+            writer.writerow(["Среднее стандартное отклонение",
+                             f"{stats['total_mean_std']:.2f}",
+                             "Среднее стд. отклонение по парам"])
+            writer.writerow(["Средний размах",
+                             f"{stats['total_mean_range']:.2f}",
+                             "Средняя разность макс-мин по парам"])
+            writer.writerow(["Коэффициент вариации",
+                             f"{stats['global_std_of_means'] / stats['global_mean_of_means']:.4f}"
+                             if stats['global_mean_of_means'] > 0 else "0.0000",
+                             "Относительная изменчивость средних значений"])
+            writer.writerow([])  # Пустая строка
+
+            # Раздел: Статистика по частицам (на основе средних)
+            writer.writerow(["СТАТИСТИКА ПО ЧАСТИЦАМ (СРЕДНИЕ ПО ВРЕМЕНИ, в микрометрах)"])
+            headers = [
+                "ID частицы", "Левый сосед", "Правый сосед",
+                "Общее среднее (мкм)", "Общее стд. (мкм)", "Общий макс. (мкм)", "Общий мин. (мкм)",
+                "Ср. до левого (мкм)", "Стд. до левого (мкм)", "Макс. до левого (мкм)", "Мин. до левого (мкм)",
+                "Ср. до правого (мкм)", "Стд. до правого (мкм)", "Макс. до правого (мкм)", "Мин. до правого (мкм)"
+            ]
+            writer.writerow(headers)
+
+            for particle in distances_results['particle_stats']:
+                row = [
+                    particle['particle_id'],
+                    "Есть" if particle['has_left'] else "Нет",
+                    "Есть" if particle['has_right'] else "Нет",
+                    f"{particle['overall_mean']:.2f}",
+                    f"{particle['overall_std']:.2f}",
+                    f"{particle['overall_max']:.2f}",
+                    f"{particle['overall_min']:.2f}"
+                ]
+
+                if particle['has_left']:
+                    row.extend([
+                        f"{particle['left_mean']:.2f}",
+                        f"{particle['left_std']:.2f}",
+                        f"{particle['left_max']:.2f}",
+                        f"{particle['left_min']:.2f}"
+                    ])
+                else:
+                    row.extend(["", "", "", ""])
+
+                if particle['has_right']:
+                    row.extend([
+                        f"{particle['right_mean']:.2f}",
+                        f"{particle['right_std']:.2f}",
+                        f"{particle['right_max']:.2f}",
+                        f"{particle['right_min']:.2f}"
+                    ])
+                else:
+                    row.extend(["", "", "", ""])
+
+                writer.writerow(row)
+
+            writer.writerow([])  # Пустая строка
+
+            # Раздел: Статистика по парам соседей
+            writer.writerow(["СТАТИСТИКА ПО ПАРАМ СОСЕДНИХ ЧАСТИЦ (СРЕДНИЕ ПО ВРЕМЕНИ, в микрометрах)"])
+            writer.writerow(["ID пары", "Частица 1", "Частица 2",
+                             "СРЕДНЕЕ расстояние (мкм)", "Стд. отклонение (мкм)", "Макс. расстояние (мкм)",
+                             "Мин. расстояние (мкм)", "Размах (мкм)", "Относ. вариация", "Стабильность"])
+
+            for pair in distances_results['pair_stats']:
+                rel_var = pair['relative_variation']
+                if rel_var < 0.05:
+                    stability = "Очень высокая"
+                elif rel_var < 0.1:
+                    stability = "Высокая"
+                elif rel_var < 0.2:
+                    stability = "Средняя"
+                elif rel_var < 0.3:
+                    stability = "Низкая"
+                else:
+                    stability = "Очень низкая"
+
+                writer.writerow([
+                    pair['pair_id'],
+                    pair['particle1'],
+                    pair['particle2'],
+                    f"{pair['mean_distance']:.2f}",
+                    f"{pair['std_distance']:.2f}",
+                    f"{pair['max_distance']:.2f}",
+                    f"{pair['min_distance']:.2f}",
+                    f"{pair['range']:.2f}",
+                    f"{rel_var:.4f}",
+                    stability
+                ])
+
+        print(f"Основной CSV файл (средние по времени, в микрометрах) сохранен: {full_path}")
+
+        # 2. Создаем упрощенные CSV файлы с помощью pandas
+        print("\nСоздание упрощенных CSV файлов (в микрометрах)...")
+
+        # Файл 1: Статистика по частицам (средние)
+        particle_data = []
+        for particle in distances_results['particle_stats']:
+            particle_data.append({
+                'Particle_ID': particle['particle_id'],
+                'Has_Left_Neighbor': particle['has_left'],
+                'Has_Right_Neighbor': particle['has_right'],
+                'Overall_Mean_Distance_microns': particle['overall_mean'],
+                'Overall_Std_Distance_microns': particle['overall_std'],
+                'Overall_Max_Distance_microns': particle['overall_max'],
+                'Overall_Min_Distance_microns': particle['overall_min'],
+                'Left_Mean_Distance_microns': particle.get('left_mean', np.nan),
+                'Left_Std_Distance_microns': particle.get('left_std', np.nan),
+                'Left_Max_Distance_microns': particle.get('left_max', np.nan),
+                'Left_Min_Distance_microns': particle.get('left_min', np.nan),
+                'Right_Mean_Distance_microns': particle.get('right_mean', np.nan),
+                'Right_Std_Distance_microns': particle.get('right_std', np.nan),
+                'Right_Max_Distance_microns': particle.get('right_max', np.nan),
+                'Right_Min_Distance_microns': particle.get('right_min', np.nan)
+            })
+
+        particle_df = pd.DataFrame(particle_data)
+        particle_csv_path = os.path.join(output_path, "particle_mean_distance_stats_microns.csv")
+        particle_df.to_csv(particle_csv_path, index=False, float_format='%.2f', encoding='utf-8-sig')
+        print(f"  Статистика по частицам (средние, мкм): {particle_csv_path}")
+
+        # Файл 2: Статистика по парам (средние)
+        pair_data = []
+        for pair in distances_results['pair_stats']:
+            rel_var = pair['relative_variation']
+            if rel_var < 0.05:
+                stability = "Very High"
+            elif rel_var < 0.1:
+                stability = "High"
+            elif rel_var < 0.2:
+                stability = "Medium"
+            elif rel_var < 0.3:
+                stability = "Low"
+            else:
+                stability = "Very Low"
+
+            pair_data.append({
+                'Pair_ID': pair['pair_id'],
+                'Particle_1': pair['particle1'],
+                'Particle_2': pair['particle2'],
+                'Mean_Distance_microns': pair['mean_distance'],
+                'Std_Distance_microns': pair['std_distance'],
+                'Max_Distance_microns': pair['max_distance'],
+                'Min_Distance_microns': pair['min_distance'],
+                'Range_microns': pair['range'],
+                'Relative_Variation': pair['relative_variation'],
+                'Stability': stability
+            })
+
+        pair_df = pd.DataFrame(pair_data)
+        pair_csv_path = os.path.join(output_path, "pair_mean_distance_stats_microns.csv")
+        pair_df.to_csv(pair_csv_path, index=False, float_format='%.2f', encoding='utf-8-sig')
+        print(f"  Статистика по парам (средние, мкм): {pair_csv_path}")
+
+        # Файл 3: Общая статистика (средние)
+        overall_stats = distances_results['overall_stats']
+        overall_data = {
+            'Statistic': [
+                'Scale_microns_per_pixel',
+                'Total_Particles',
+                'Total_Time_Steps',
+                'Total_Neighbor_Pairs',
+                'Global_Mean_of_Means_microns',
+                'Global_Median_of_Means_microns',
+                'Global_Max_of_Means_microns',
+                'Global_Min_of_Means_microns',
+                'Global_Std_of_Means_microns',
+                'Q1_25th_Percentile_microns',
+                'Q3_75th_Percentile_microns',
+                'IQR_Q3_minus_Q1_microns',
+                'Mean_Std_Across_Pairs_microns',
+                'Mean_Range_Across_Pairs_microns',
+                'Coefficient_of_Variation',
+                'Min_Relative_Variation',
+                'Max_Relative_Variation',
+                'Mean_Relative_Variation'
+            ],
+            'Value': [
+                f"{scale:.1f}",
+                n_particles,
+                n_timesteps,
+                n_particles - 1,
+                f"{overall_stats['global_mean_of_means']:.2f}",
+                f"{overall_stats['global_median_of_means']:.2f}",
+                f"{overall_stats['global_max_of_means']:.2f}",
+                f"{overall_stats['global_min_of_means']:.2f}",
+                f"{overall_stats['global_std_of_means']:.2f}",
+                f"{overall_stats['global_q1']:.2f}",
+                f"{overall_stats['global_q3']:.2f}",
+                f"{overall_stats['global_q3'] - overall_stats['global_q1']:.2f}",
+                f"{overall_stats['total_mean_std']:.2f}",
+                f"{overall_stats['total_mean_range']:.2f}",
+                f"{overall_stats['global_std_of_means'] / overall_stats['global_mean_of_means']:.4f}"
+                if overall_stats['global_mean_of_means'] > 0 else "0.0000",
+                f"{np.min([p['relative_variation'] for p in distances_results['pair_stats']]):.4f}",
+                f"{np.max([p['relative_variation'] for p in distances_results['pair_stats']]):.4f}",
+                f"{np.mean([p['relative_variation'] for p in distances_results['pair_stats']]):.4f}"
+            ],
+            'Description': [
+                'Scale: micrometers per pixel',
+                'Total number of particles',
+                'Total number of time steps used for averaging',
+                'Number of neighbor pairs (particles-1)',
+                'Mean of mean distances (averaged over time)',
+                'Median of mean distances',
+                'Maximum of mean distances',
+                'Minimum of mean distances',
+                'Standard deviation of mean distances',
+                'First quartile (25th percentile) of means',
+                'Third quartile (75th percentile) of means',
+                'Interquartile range of means',
+                'Average standard deviation across all pairs',
+                'Average range (max-min) across all pairs',
+                'Relative variability of means (std/mean)',
+                'Minimum relative variation across pairs',
+                'Maximum relative variation across pairs',
+                'Mean relative variation across pairs'
+            ]
+        }
+
+        overall_df = pd.DataFrame(overall_data)
+        overall_csv_path = os.path.join(output_path, "overall_mean_distance_stats_microns.csv")
+        overall_df.to_csv(overall_csv_path, index=False, encoding='utf-8-sig')
+        print(f"  Общая статистика (средние, мкм): {overall_csv_path}")
+
+        # Файл 4: Средние расстояния по времени
+        time_data = []
+        for time_stat in distances_results['time_stats']:
+            time_data.append({
+                'Time_Step': time_stat['time_step'],
+                'Mean_Distance_At_Time_microns': time_stat['mean_at_time'],
+                'Std_Distance_At_Time_microns': time_stat['std_at_time'],
+                'Max_Distance_At_Time_microns': time_stat['max_at_time'],
+                'Min_Distance_At_Time_microns': time_stat['min_at_time']
+            })
+
+        time_df = pd.DataFrame(time_data)
+        time_csv_path = os.path.join(output_path, "time_mean_distance_stats_microns.csv")
+        time_df.to_csv(time_csv_path, index=False, float_format='%.2f', encoding='utf-8-sig')
+        print(f"  Временная статистика (средние, мкм): {time_csv_path}")
+
+        # Файл 5: Все средние расстояния по парам
+        mean_distances = distances_results['mean_neighbor_distances']
+        simple_data = pd.DataFrame({
+            'Pair_ID': range(len(mean_distances)),
+            'Particle_1': range(len(mean_distances)),
+            'Particle_2': range(1, len(mean_distances) + 1),
+            'Mean_Distance_microns': mean_distances,
+            'Std_Distance_microns': distances_results['std_neighbor_distances'],
+            'Max_Distance_microns': distances_results['max_neighbor_distances'],
+            'Min_Distance_microns': distances_results['min_neighbor_distances']
+        })
+
+        simple_csv_path = os.path.join(output_path, "all_mean_distances_microns.csv")
+        simple_data.to_csv(simple_csv_path, index=False, float_format='%.2f', encoding='utf-8-sig')
+        print(f"  Все средние расстояния (мкм): {simple_csv_path}")
+
+        return full_path, particle_csv_path, pair_csv_path, overall_csv_path, time_csv_path, simple_csv_path
+
+    except Exception as e:
+        print(f"Ошибка при сохранении CSV файлов со средними расстояниями: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None, None, None, None, None
+
+
+def plot_interparticle_distances(distances_results, output_path, filename_prefix="interparticle_mean_microns"):
+    """
+    Создает графики для визуализации СРЕДНИХ межчастичных расстояний.
+    Все значения в микрометрах.
+    """
+    if distances_results is None:
+        return []
+
+    try:
+        scale = distances_results.get('scale', SCALE)
+        print(f"\nСоздание графиков СРЕДНИХ межчастичных расстояний...")
+        print(f"Все значения в микрометрах (масштаб: {scale} мкм/пиксель)")
+
+        plot_files = []
+
+        mean_distances = distances_results['mean_neighbor_distances']
+        std_distances = distances_results['std_neighbor_distances']
+        max_distances = distances_results['max_neighbor_distances']
+        min_distances = distances_results['min_neighbor_distances']
+
+        pair_ids = [p['pair_id'] for p in distances_results['pair_stats']]
+
+        # 1. График средних расстояний по парам с доверительными интервалами
+        plt.figure(figsize=(14, 10))
+
+        plt.subplot(2, 2, 1)
+        bars = plt.bar(pair_ids, mean_distances, alpha=0.7, color='skyblue',
+                       edgecolor='black', yerr=std_distances, capsize=5, error_kw={'elinewidth': 1})
+
+        for i, (mean_val, max_val, min_val) in enumerate(zip(mean_distances, max_distances, min_distances)):
+            plt.plot([i - 0.3, i + 0.3], [max_val, max_val], 'r-', linewidth=1, alpha=0.5)
+            plt.plot([i - 0.3, i + 0.3], [min_val, min_val], 'g-', linewidth=1, alpha=0.5)
+
+        plt.xlabel('ID пары соседей')
+        plt.ylabel('Среднее расстояние (мкм)')
+        plt.title(f'Средние расстояния между соседними частицами\n(масштаб: {scale} мкм/пиксель)')
+        plt.grid(True, alpha=0.3, axis='y')
+
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='skyblue', edgecolor='black', alpha=0.7, label='Среднее ± стд'),
+            Patch(facecolor='red', edgecolor='red', alpha=0.5, label='Максимум'),
+            Patch(facecolor='green', edgecolor='green', alpha=0.5, label='Минимум')
+        ]
+        plt.legend(handles=legend_elements, loc='upper right')
+
+        # 2. График относительной вариации
+        plt.subplot(2, 2, 2)
+        relative_variations = [p['relative_variation'] for p in distances_results['pair_stats']]
+
+        colors = []
+        for rv in relative_variations:
+            if rv < 0.05:
+                colors.append('darkgreen')
+            elif rv < 0.1:
+                colors.append('green')
+            elif rv < 0.2:
+                colors.append('gold')
+            elif rv < 0.3:
+                colors.append('orange')
+            else:
+                colors.append('red')
+
+        bars = plt.bar(pair_ids, relative_variations, color=colors, edgecolor='black')
+        plt.xlabel('ID пары соседей')
+        plt.ylabel('Отношение стд/среднее')
+        plt.title('Относительная изменчивость расстояний\n(показатель стабильности)')
+        plt.grid(True, alpha=0.3, axis='y')
+
+        plt.axhline(y=0.05, color='darkgreen', linestyle='--', alpha=0.5, linewidth=1)
+        plt.axhline(y=0.1, color='green', linestyle='--', alpha=0.5, linewidth=1)
+        plt.axhline(y=0.2, color='gold', linestyle='--', alpha=0.5, linewidth=1)
+        plt.axhline(y=0.3, color='orange', linestyle='--', alpha=0.5, linewidth=1)
+
+        # 3. График размаха (макс-мин) по парам
+        plt.subplot(2, 2, 3)
+        ranges = max_distances - min_distances
+
+        plt.bar(pair_ids, ranges, alpha=0.7, color='lightcoral', edgecolor='black')
+        plt.xlabel('ID пары соседей')
+        plt.ylabel('Размах (макс - мин), мкм')
+        plt.title('Размах расстояний по парам')
+        plt.grid(True, alpha=0.3, axis='y')
+
+        # 4. Гистограмма средних расстояний
+        plt.subplot(2, 2, 4)
+        plt.hist(mean_distances, bins=20, alpha=0.7, color='lightblue', edgecolor='black')
+        plt.xlabel('Среднее расстояние (мкм)')
+        plt.ylabel('Количество пар')
+        plt.title('Распределение средних расстояний')
+
+        mean_of_means = np.mean(mean_distances)
+        median_of_means = np.median(mean_distances)
+        plt.axvline(mean_of_means, color='red', linestyle='--', label=f'Ср: {mean_of_means:.1f} мкм')
+        plt.axvline(median_of_means, color='green', linestyle='--', label=f'Мед: {median_of_means:.1f} мкм')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        summary_path = os.path.join(output_path, f"{filename_prefix}_summary.png")
+        plt.savefig(summary_path, dpi=150, bbox_inches='tight')
+        plot_files.append(summary_path)
+        print(f"  Сводные графики (средние, мкм) сохранены: {summary_path}")
+
+        # 5. График зависимости среднего расстояния от положения в цепочке
+        plt.figure(figsize=(12, 6))
+
+        plt.subplot(1, 2, 1)
+        plt.plot(pair_ids, mean_distances, 'bo-', linewidth=2, markersize=5, label='Среднее')
+        plt.fill_between(pair_ids, mean_distances - std_distances,
+                         mean_distances + std_distances, alpha=0.3, color='blue', label='± стд')
+        plt.xlabel('Позиция в цепочке (ID пары)')
+        plt.ylabel('Среднее расстояние (мкм)')
+        plt.title(f'Зависимость среднего расстояния от положения\n(масштаб: {scale} мкм/пиксель)')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+
+        if len(pair_ids) > 1:
+            slope, intercept, r_value, p_value, std_err = stats.linregress(pair_ids, mean_distances)
+            x_fit = np.array([min(pair_ids), max(pair_ids)])
+            y_fit = slope * x_fit + intercept
+            plt.plot(x_fit, y_fit, 'r--', linewidth=2,
+                     label=f'Тренд: {slope:.3f} мкм/позиция, R²={r_value ** 2:.3f}')
+            plt.legend()
+
+        # 6. График стабильности по положению в цепочке
+        plt.subplot(1, 2, 2)
+
+        for i, (rv, color) in enumerate(zip(relative_variations, colors)):
+            plt.scatter(pair_ids[i], rv, color=color, s=50, edgecolor='black', zorder=3)
+
+        plt.plot(pair_ids, relative_variations, 'k-', alpha=0.3, linewidth=1)
+        plt.xlabel('Позиция в цепочке (ID пары)')
+        plt.ylabel('Относительная вариация')
+        plt.title('Стабильность расстояний по положению в цепочке')
+        plt.grid(True, alpha=0.3)
+
+        from matplotlib.patches import Patch
+        stability_legend = [
+            Patch(facecolor='darkgreen', edgecolor='black', label='Очень высокая (<0.05)'),
+            Patch(facecolor='green', edgecolor='black', label='Высокая (0.05-0.1)'),
+            Patch(facecolor='gold', edgecolor='black', label='Средняя (0.1-0.2)'),
+            Patch(facecolor='orange', edgecolor='black', label='Низкая (0.2-0.3)'),
+            Patch(facecolor='red', edgecolor='black', label='Очень низкая (>0.3)')
+        ]
+        plt.legend(handles=stability_legend, loc='upper right', fontsize=8)
+
+        plt.tight_layout()
+        trend_path = os.path.join(output_path, f"{filename_prefix}_trends.png")
+        plt.savefig(trend_path, dpi=150, bbox_inches='tight')
+        plot_files.append(trend_path)
+        print(f"  Графики трендов (средние, мкм) сохранены: {trend_path}")
+
+        plt.close('all')
+
+        return plot_files
+
+    except Exception as e:
+        print(f"Ошибка при создании графиков средних расстояний: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+
+def main():
+    """
+    Основная функция программы.
+    """
+    # Укажите путь к папке с файлами
+    path = "C:/Users/17.3 Active Systems/Downloads/3Д/3Д"  # ЗАМЕНИТЕ НА ВАШ ПУТЬ!
+
+    print("=" * 70)
+    print("АНАЛИЗ СРЕДНИХ ПО ВРЕМЕНИ РАССТОЯНИЙ МЕЖДУ ЧАСТИЦАМИ")
+    print("=" * 70)
+    print(f"МАСШТАБ: {SCALE} микрометров на пиксель")
+    print("Все значения будут пересчитаны в микрометры")
+
+    # 1. Чтение данных (с автоматическим масштабированием в микрометры)
+    x_pixels, y_pixels, z_pixels, coords_3d_microns = read_coordinates_from_path(path)
+
+    if coords_3d_microns is None:
+        print("Не удалось загрузить данные. Завершение работы.")
+        return
+
+    # 2. Расчет СРЕДНИХ межчастичных расстояний (в микрометрах)
+    distances_results = calculate_interparticle_distances(coords_3d_microns)
+
+    # 3. Сохранение статистики СРЕДНИХ расстояний в CSV (в микрометрах)
+    distance_csv_files = save_interparticle_distances_to_csv(distances_results, path)
+
+    # 4. Построение графиков СРЕДНИХ расстояний (в микрометрах)
+    distance_plots = plot_interparticle_distances(distances_results, path)
+
+    print("\n" + "=" * 70)
+    print("АНАЛИЗ СРЕДНИХ МЕЖЧАСТИЧНЫХ РАССТОЯНИЙ ЗАВЕРШЕН УСПЕШНО!")
+    print("=" * 70)
+
+    # Сводка созданных файлов
+    print("\nСОЗДАННЫЕ ФАЙЛЫ (СРЕДНИЕ ПО ВРЕМЕНИ, в микрометрах):")
+
+    if distance_csv_files and distance_csv_files[0]:
+        files_info = [
+            ("Основной CSV файл", distance_csv_files[0]),
+            ("Статистика по частицам", distance_csv_files[1]),
+            ("Статистика по парам", distance_csv_files[2]),
+            ("Общая статистика", distance_csv_files[3]),
+            ("Временная статистика", distance_csv_files[4]),
+            ("Все средние расстояния", distance_csv_files[5])
+        ]
+
+        for desc, filepath in files_info:
+            if filepath and os.path.exists(filepath):
+                print(f"• {desc}: {os.path.basename(filepath)}")
+
+    if distance_plots:
+        print(f"• Графики средних расстояний ({len(distance_plots)} файлов):")
+        for plot_file in distance_plots:
+            print(f"  - {os.path.basename(plot_file)}")
+
+    # Краткая статистика
+    if distances_results:
+        stats = distances_results['overall_stats']
+        mean_dists = distances_results['mean_neighbor_distances']
+
+        print("\nКРАТКАЯ СТАТИСТИКА (СРЕДНИЕ ПО ВРЕМЕНИ, в микрометрах):")
+        print(f"• Масштаб: {SCALE} мкм/пиксель")
+        print(f"• Всего частиц: {distances_results['n_particles']}")
+        print(f"• Временных шагов для усреднения: {distances_results['n_timesteps']}")
+        print(f"• Всего пар соседей: {stats['total_pairs']}")
+        print(f"• Среднее из средних расстояний: {stats['global_mean_of_means']:.1f} мкм")
+        print(f"• Медиана средних расстояний: {stats['global_median_of_means']:.1f} мкм")
+        print(f"• Разброс средних: от {stats['global_min_of_means']:.1f} до {stats['global_max_of_means']:.1f} мкм")
+        print(f"• Стандартное отклонение средних: {stats['global_std_of_means']:.1f} мкм")
+        print(
+            f"• Средняя относительная вариация: {np.mean([p['relative_variation'] for p in distances_results['pair_stats']]):.3f}")
+
+
+if __name__ == "__main__":
+    # Укажите путь к вашей папке
+    path = "C:/Users/17.3 Active Systems/Downloads/3Д/3Д"  # ЗАМЕНИТЕ НА ВАШ ПУТЬ!
+
+    # Проверяем существование папки
+    if not os.path.exists(path):
+        print(f"Папка {path} не существует!")
+
+        # Создаем тестовые данные в пикселях
+        n_timesteps = 100
+        n_particles = 15
+
+        np.random.seed(42)
+
+        # Создаем цепочку частиц с разными средними расстояниями (в пикселях)
+        base_means_pixels = np.linspace(40, 75, n_particles - 1)  # В пикселях
+        base_stds_pixels = np.linspace(2.5, 10, n_particles - 1)  # В пикселях
+
+        x_data_pixels = np.zeros((n_timesteps, n_particles))
+        y_data_pixels = np.zeros((n_timesteps, n_particles))
+        z_data_pixels = np.zeros((n_timesteps, n_particles))
+
+        x_data_pixels[:, 0] = 0
+        y_data_pixels[:, 0] = 0
+        z_data_pixels[:, 0] = 0
+
+        for i in range(1, n_particles):
+            mean_dist_pixels = base_means_pixels[i - 1]
+            std_dist_pixels = base_stds_pixels[i - 1]
+
+            distances_pixels = np.random.normal(mean_dist_pixels, std_dist_pixels, n_timesteps)
+            distances_pixels = np.clip(distances_pixels, mean_dist_pixels - 2 * std_dist_pixels,
+                                       mean_dist_pixels + 2 * std_dist_pixels)
+
+            angle = i * 0.3
+
+            for t in range(n_timesteps):
+                x_data_pixels[t, i] = x_data_pixels[t, i - 1] + distances_pixels[t] * np.cos(angle)
+                y_data_pixels[t, i] = y_data_pixels[t, i - 1] + distances_pixels[t] * np.sin(angle)
+                z_data_pixels[t, i] = z_data_pixels[t, i - 1] + distances_pixels[t] * 0.1
+
+        os.makedirs(path, exist_ok=True)
+        np.savetxt(os.path.join(path, 'X1000.txt'), x_data_pixels)
+        np.savetxt(os.path.join(path, 'Y1000.txt'), y_data_pixels)
+        np.savetxt(os.path.join(path, 'Z1000.txt'), z_data_pixels)
+
+        print(f"Тестовые файлы (в пикселях) созданы в {path}")
+        print(
+            f"Средние расстояния между соседями (в пикселях): от {base_means_pixels[0]:.1f} до {base_means_pixels[-1]:.1f}")
+        print(f"Стандартные отклонения (в пикселях): от {base_stds_pixels[0]:.1f} до {base_stds_pixels[-1]:.1f}")
+        print(f"После масштабирования ({SCALE} мкм/пикс):")
+        print(f"  Средние расстояния: от {base_means_pixels[0] * SCALE:.1f} до {base_means_pixels[-1] * SCALE:.1f} мкм")
+        print(
+            f"  Стандартные отклонения: от {base_stds_pixels[0] * SCALE:.1f} до {base_stds_pixels[-1] * SCALE:.1f} мкм")
+
+    # Запускаем анализ средних расстояний
+    main()
