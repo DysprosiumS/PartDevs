@@ -3,6 +3,8 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import csv
+from scipy import stats, linalg
+from mpl_toolkits.mplot3d import Axes3D
 
 
 def read_coordinates_from_path(path, filenames=None, delimiter=None):
@@ -124,148 +126,224 @@ def calculate_median_deviations(coordinates_3d):
         'mean_x_deviations': mean_x_deviations,
         'mean_y_deviations': mean_y_deviations,
         'mean_z_deviations': mean_z_deviations,
-        'particle_indices': np.arange(n_particles)
+        'particle_indices': np.arange(n_particles),
+        'coordinates_3d': coordinates_3d
     }
 
     return results
 
 
-def plot_deviations(results, output_path, filename_prefix="deviations"):
+def calculate_axis_line(median_positions):
     """
-    Создает графики для визуализации отклонений.
+    Рассчитывает ось структуры - аппроксимационную прямую для медианных положений частиц.
     """
-    if results is None:
-        return []
+    print("\n" + "=" * 60)
+    print("РАСЧЕТ ОСИ СТРУКТУРЫ")
+    print("=" * 60)
 
-    try:
-        print(f"\nСоздание графиков...")
+    n_particles = median_positions.shape[0]
 
-        # 1. Гистограмма максимальных отклонений
-        plt.figure(figsize=(10, 6))
-        plt.hist(results['max_deviations'], bins=50, alpha=0.7, color='skyblue', edgecolor='black')
-        plt.xlabel('Максимальное отклонение')
-        plt.ylabel('Количество частиц')
-        plt.title('Распределение максимальных отклонений частиц')
-        plt.grid(True, alpha=0.3)
+    # 1. Вычисляем главные компоненты (PCA) для нахождения направления оси
+    centroid = np.mean(median_positions, axis=0)
+    centered_data = median_positions - centroid
 
-        # Добавляем вертикальные линии для статистики
-        mean_max = np.mean(results['max_deviations'])
-        median_max = np.median(results['max_deviations'])
-        plt.axvline(mean_max, color='red', linestyle='--', label=f'Среднее: {mean_max:.4f}')
-        plt.axvline(median_max, color='green', linestyle='--', label=f'Медиана: {median_max:.4f}')
-        plt.legend()
+    # Вычисляем ковариационную матрицу
+    cov_matrix = np.cov(centered_data.T)
 
-        hist_path = os.path.join(output_path, f"{filename_prefix}_histogram.png")
-        plt.savefig(hist_path, dpi=150, bbox_inches='tight')
-        print(f"  Гистограмма сохранена: {hist_path}")
+    # Находим собственные значения и собственные векторы
+    eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
 
-        # 2. График максимальных отклонений по частицам
-        plt.figure(figsize=(12, 6))
-        particle_indices = results['particle_indices']
+    # Направление оси - собственный вектор, соответствующий наибольшему собственному значению
+    max_eigenvalue_idx = np.argmax(eigenvalues)
+    direction = eigenvectors[:, max_eigenvalue_idx]
 
-        plt.subplot(1, 2, 1)
-        plt.scatter(particle_indices, results['max_deviations'], alpha=0.5, s=10)
-        plt.xlabel('Индекс частицы')
-        plt.ylabel('Максимальное отклонение')
-        plt.title('Максимальные отклонения по частицам')
-        plt.grid(True, alpha=0.3)
+    # Нормализуем направляющий вектор
+    direction = direction / np.linalg.norm(direction)
 
-        plt.subplot(1, 2, 2)
-        plt.scatter(particle_indices, results['mean_deviations'], alpha=0.5, s=10, color='orange')
-        plt.xlabel('Индекс частицы')
-        plt.ylabel('Среднее отклонение')
-        plt.title('Средние отклонения по частицам')
-        plt.grid(True, alpha=0.3)
+    # 2. Линейная регрессия для получения параметров прямой
+    t_values = np.dot(centered_data, direction)
 
-        scatter_path = os.path.join(output_path, f"{filename_prefix}_scatter.png")
-        plt.savefig(scatter_path, dpi=150, bbox_inches='tight')
-        print(f"  Точечные графики сохранены: {scatter_path}")
+    # 3. Вычисляем расстояние от каждой точки до прямой
+    distances = []
+    for point in median_positions:
+        v = point - centroid
+        projection = np.dot(v, direction) * direction
+        perpendicular = v - projection
+        distance = np.linalg.norm(perpendicular)
+        distances.append(distance)
 
-        # 3. График отклонений по координатам
-        plt.figure(figsize=(12, 8))
+    distances = np.array(distances)
 
-        plt.subplot(2, 2, 1)
-        plt.scatter(particle_indices, results['max_x_deviations'], alpha=0.5, s=10, color='r', label='X')
-        plt.scatter(particle_indices, results['max_y_deviations'], alpha=0.5, s=10, color='g', label='Y')
-        plt.scatter(particle_indices, results['max_z_deviations'], alpha=0.5, s=10, color='b', label='Z')
-        plt.xlabel('Индекс частицы')
-        plt.ylabel('Максимальное отклонение')
-        plt.title('Максимальные отклонения по координатам')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
+    # 4. Коэффициент детерминации R²
+    total_variance = np.var(median_positions, axis=0).sum()
+    explained_variance = eigenvalues[max_eigenvalue_idx]
+    r_squared = explained_variance / total_variance if total_variance > 0 else 0
 
-        plt.subplot(2, 2, 2)
-        plt.scatter(particle_indices, results['mean_x_deviations'], alpha=0.5, s=10, color='r', label='X')
-        plt.scatter(particle_indices, results['mean_y_deviations'], alpha=0.5, s=10, color='g', label='Y')
-        plt.scatter(particle_indices, results['mean_z_deviations'], alpha=0.5, s=10, color='b', label='Z')
-        plt.xlabel('Индекс частицы')
-        plt.ylabel('Среднее отклонение')
-        plt.title('Средние отклонения по координатам')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
+    # 5. Формируем уравнение прямой
+    equation_parametric = f"x = {centroid[0]:.6f} + {direction[0]:.6f} * t\n" \
+                          f"y = {centroid[1]:.6f} + {direction[1]:.6f} * t\n" \
+                          f"z = {centroid[2]:.6f} + {direction[2]:.6f} * t"
 
-        plt.subplot(2, 2, 3)
-        components = ['X', 'Y', 'Z']
-        max_values = [np.mean(results['max_x_deviations']),
-                      np.mean(results['max_y_deviations']),
-                      np.mean(results['max_z_deviations'])]
-        plt.bar(components, max_values, color=['red', 'green', 'blue'], alpha=0.7)
-        plt.ylabel('Среднее максимальное отклонение')
-        plt.title('Средние максимальные отклонения по осям')
+    equation_symmetric = f"(x - {centroid[0]:.6f}) / {direction[0]:.6f} = " \
+                         f"(y - {centroid[1]:.6f}) / {direction[1]:.6f} = " \
+                         f"(z - {centroid[2]:.6f}) / {direction[2]:.6f}"
 
-        plt.subplot(2, 2, 4)
-        mean_values = [np.mean(results['mean_x_deviations']),
-                       np.mean(results['mean_y_deviations']),
-                       np.mean(results['mean_z_deviations'])]
-        plt.bar(components, mean_values, color=['red', 'green', 'blue'], alpha=0.7)
-        plt.ylabel('Среднее отклонение')
-        plt.title('Средние отклонения по осям')
+    # 6. Строим точки на прямой для визуализации
+    t_min = np.min(t_values)
+    t_max = np.max(t_values)
 
-        plt.tight_layout()
-        coords_path = os.path.join(output_path, f"{filename_prefix}_coordinates.png")
-        plt.savefig(coords_path, dpi=150, bbox_inches='tight')
-        print(f"  Графики по координатам сохранены: {coords_path}")
+    t_range_extended = np.linspace(t_min - 0.2 * (t_max - t_min),
+                                   t_max + 0.2 * (t_max - t_min), 100)
 
-        # 4. Дополнительный график: сравнение максимальных и средних отклонений
-        plt.figure(figsize=(10, 6))
+    line_points = np.array([centroid + t * direction for t in t_range_extended])
 
-        # Сортируем частицы по максимальному отклонению для красивого графика
-        sorted_indices = np.argsort(results['max_deviations'])
-        sorted_max = results['max_deviations'][sorted_indices]
-        sorted_mean = results['mean_deviations'][sorted_indices]
+    axis_results = {
+        'centroid': centroid,
+        'direction': direction,
+        'eigenvalues': eigenvalues,
+        'eigenvectors': eigenvectors,
+        't_values': t_values,
+        'distances_to_axis': distances,
+        'r_squared': r_squared,
+        'equation_parametric': equation_parametric,
+        'equation_symmetric': equation_symmetric,
+        'line_points': line_points,
+        'mean_distance': np.mean(distances),
+        'max_distance': np.max(distances),
+        'median_distance': np.median(distances),
+        'std_distance': np.std(distances)
+    }
 
-        plt.plot(sorted_max, label='Максимальные отклонения', linewidth=2)
-        plt.plot(sorted_mean, label='Средние отклонения', linewidth=2)
-        plt.xlabel('Частицы (отсортированы по макс. отклонению)')
-        plt.ylabel('Отклонение')
-        plt.title('Сравнение максимальных и средних отклонений')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
+    # Вывод результатов
+    print(f"Центр масс: {centroid}")
+    print(f"Направляющий вектор: {direction}")
+    print(f"\nУравнение прямой:")
+    print(equation_parametric)
+    print(f"\nКоэффициент детерминации R²: {r_squared:.6f}")
+    print(f"Среднее расстояние до оси: {np.mean(distances):.6f}")
+    print(f"Максимальное расстояние до оси: {np.max(distances):.6f}")
+    print(f"Медианное расстояние до оси: {np.median(distances):.6f}")
+    print(f"Стандартное отклонение расстояний: {np.std(distances):.6f}")
 
-        comparison_path = os.path.join(output_path, f"{filename_prefix}_comparison.png")
-        plt.savefig(comparison_path, dpi=150, bbox_inches='tight')
-        print(f"  График сравнения сохранен: {comparison_path}")
-
-        plt.close('all')
-
-        return [hist_path, scatter_path, coords_path, comparison_path]
-
-    except Exception as e:
-        print(f"Ошибка при создании графиков: {e}")
-        return []
+    return axis_results
 
 
-def save_results_to_csv(results, output_path, filename="particle_deviations.csv"):
+def calculate_deviations_from_axis(coordinates_3d, axis_results):
     """
-    Сохраняет результаты расчетов в один CSV файл с правильной обработкой текста.
+    Рассчитывает отклонения частиц от оси структуры во времени.
+    Возвращает средние и максимальные отклонения от оси для каждой частицы.
     """
-    if results is None:
-        print("Нет данных для сохранения")
-        return None, None, None
+    print("\n" + "=" * 60)
+    print("РАСЧЕТ ОТКЛОНЕНИЙ ЧАСТИЦ ОТ ОСИ ВО ВРЕМЕНИ")
+    print("=" * 60)
+
+    n_timesteps = coordinates_3d.shape[0]
+    n_particles = coordinates_3d.shape[1]
+
+    centroid = axis_results['centroid']
+    direction = axis_results['direction']
+
+    print(f"Расчет отклонений для {n_particles} частиц по {n_timesteps} временным шагам...")
+
+    # Массивы для хранения отклонений от оси
+    axis_deviations = np.zeros((n_timesteps, n_particles))  # Расстояния до оси
+    axis_deviations_x = np.zeros((n_timesteps, n_particles))  # Отклонения по X
+    axis_deviations_y = np.zeros((n_timesteps, n_particles))  # Отклонения по Y
+    axis_deviations_z = np.zeros((n_timesteps, n_particles))  # Отклонения по Z
+
+    # Проекции на ось
+    axis_projections = np.zeros((n_timesteps, n_particles))  # Параметр t
+
+    # Для каждого временного шага и каждой частицы
+    for t in range(n_timesteps):
+        for p in range(n_particles):
+            point = coordinates_3d[t, p, :]
+
+            # Вектор от центра масс до точки
+            v = point - centroid
+
+            # Проекция на направление оси (параметр t)
+            t_param = np.dot(v, direction)
+            axis_projections[t, p] = t_param
+
+            # Проекция точки на ось
+            projected_point = centroid + t_param * direction
+
+            # Вектор отклонения от оси
+            deviation_vector = point - projected_point
+
+            # Сохраняем компоненты отклонения
+            axis_deviations_x[t, p] = deviation_vector[0]
+            axis_deviations_y[t, p] = deviation_vector[1]
+            axis_deviations_z[t, p] = deviation_vector[2]
+
+            # Евклидово расстояние до оси
+            axis_deviations[t, p] = np.linalg.norm(deviation_vector)
+
+    # Рассчитываем статистики для каждой частицы
+    max_axis_deviations = np.max(axis_deviations, axis=0)  # Максимальные отклонения
+    mean_axis_deviations = np.mean(axis_deviations, axis=0)  # Средние отклонения
+    std_axis_deviations = np.std(axis_deviations, axis=0)  # Стандартные отклонения
+
+    # Максимальные отклонения по осям
+    max_axis_x = np.max(np.abs(axis_deviations_x), axis=0)
+    max_axis_y = np.max(np.abs(axis_deviations_y), axis=0)
+    max_axis_z = np.max(np.abs(axis_deviations_z), axis=0)
+
+    # Средние отклонения по осям
+    mean_axis_x = np.mean(np.abs(axis_deviations_x), axis=0)
+    mean_axis_y = np.mean(np.abs(axis_deviations_y), axis=0)
+    mean_axis_z = np.mean(np.abs(axis_deviations_z), axis=0)
+
+    # Статистика проекций на ось
+    mean_projections = np.mean(axis_projections, axis=0)
+    std_projections = np.std(axis_projections, axis=0)
+
+    # Собираем результаты
+    axis_deviations_results = {
+        'axis_deviations': axis_deviations,  # Все отклонения [время, частицы]
+        'axis_deviations_x': axis_deviations_x,
+        'axis_deviations_y': axis_deviations_y,
+        'axis_deviations_z': axis_deviations_z,
+        'axis_projections': axis_projections,
+        'max_axis_deviations': max_axis_deviations,  # Макс. отклонения для каждой частицы
+        'mean_axis_deviations': mean_axis_deviations,  # Средние отклонения для каждой частицы
+        'std_axis_deviations': std_axis_deviations,
+        'max_axis_x': max_axis_x,
+        'max_axis_y': max_axis_y,
+        'max_axis_z': max_axis_z,
+        'mean_axis_x': mean_axis_x,
+        'mean_axis_y': mean_axis_y,
+        'mean_axis_z': mean_axis_z,
+        'mean_projections': mean_projections,
+        'std_projections': std_projections
+    }
+
+    # Вывод статистики
+    print(f"\nСТАТИСТИКА ОТКЛОНЕНИЙ ОТ ОСИ:")
+    print(f"Среднее максимальное отклонение от оси: {np.mean(max_axis_deviations):.6f}")
+    print(f"Максимальное отклонение от оси: {np.max(max_axis_deviations):.6f}")
+    print(f"Среднее среднее отклонение от оси: {np.mean(mean_axis_deviations):.6f}")
+    print(f"\nОтклонения по осям (средние максимальные):")
+    print(f"  По X: {np.mean(max_axis_x):.6f}")
+    print(f"  По Y: {np.mean(max_axis_y):.6f}")
+    print(f"  По Z: {np.mean(max_axis_z):.6f}")
+
+    return axis_deviations_results
+
+
+def save_axis_deviations_to_csv(results, axis_results, axis_deviations_results,
+                                output_path, filename="axis_deviations.csv"):
+    """
+    Сохраняет отклонения частиц от оси в отдельный CSV файл.
+    """
+    if results is None or axis_results is None or axis_deviations_results is None:
+        print("Нет данных для сохранения отклонений от оси")
+        return None
 
     try:
         print(f"\n" + "=" * 60)
-        print(f"СОХРАНЕНИЕ РЕЗУЛЬТАТОВ В CSV ФАЙЛ")
+        print(f"СОХРАНЕНИЕ ОТКЛОНЕНИЙ ОТ ОСИ В CSV ФАЙЛ")
         print("=" * 60)
 
         n_particles = len(results['particle_indices'])
@@ -278,261 +356,456 @@ def save_results_to_csv(results, output_path, filename="particle_deviations.csv"
             writer = csv.writer(f)
 
             # Заголовок файла
-            writer.writerow(["АНАЛИЗ ОТКЛОНЕНИЙ ЧАСТИЦ ОТ МЕДИАННОГО ПОЛОЖЕНИЯ"])
+            writer.writerow(["ОТКЛОНЕНИЯ ЧАСТИЦ ОТ ОСИ СТРУКТУРЫ"])
             writer.writerow([f"Дата анализа: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}"])
             writer.writerow([f"Количество частиц: {n_particles}"])
+            writer.writerow([f"Количество временных шагов: {results['coordinates_3d'].shape[0]}"])
             writer.writerow([])  # Пустая строка
 
-            # Раздел 1: Статистика по всем частицам
-            writer.writerow(["ОБЩАЯ СТАТИСТИКА"])
+            # Раздел: Информация об оси
+            writer.writerow(["ПАРАМЕТРЫ ОСИ СТРУКТУРЫ"])
+            writer.writerow(["Параметр", "Значение", "Описание"])
+            writer.writerow(["Центр масс (x,y,z)",
+                             f"{axis_results['centroid'][0]:.6f}, {axis_results['centroid'][1]:.6f}, {axis_results['centroid'][2]:.6f}",
+                             "Точка на оси"])
+            writer.writerow(["Направляющий вектор (a,b,c)",
+                             f"{axis_results['direction'][0]:.6f}, {axis_results['direction'][1]:.6f}, {axis_results['direction'][2]:.6f}",
+                             "Направление оси"])
+            writer.writerow(["Коэффициент детерминации R²",
+                             f"{axis_results['r_squared']:.6f}",
+                             "Качество аппроксимации (0-1)"])
+            writer.writerow(["Уравнение оси",
+                             axis_results['equation_parametric'].replace('\n', '; '),
+                             "Параметрическая форма"])
+            writer.writerow([])  # Пустая строка
+
+            # Раздел: Общая статистика отклонений от оси
+            writer.writerow(["ОБЩАЯ СТАТИСТИКА ОТКЛОНЕНИЙ ОТ ОСИ"])
             writer.writerow(["Параметр", "Значение", "Примечание"])
-            writer.writerow(
-                ["Среднее максимальное отклонение", f"{np.mean(results['max_deviations']):.6f}", "По всем частицам"])
-            writer.writerow(
-                ["Максимальное отклонение", f"{np.max(results['max_deviations']):.6f}", "Наибольшее значение"])
-            writer.writerow(
-                ["Минимальное отклонение", f"{np.min(results['max_deviations']):.6f}", "Наименьшее значение"])
-            writer.writerow(
-                ["Среднее среднее отклонение", f"{np.mean(results['mean_deviations']):.6f}", "По всем частицам"])
-            writer.writerow(
-                ["Среднее по X", f"{np.mean(results['max_x_deviations']):.6f}", "Макс. отклонения по оси X"])
-            writer.writerow(
-                ["Среднее по Y", f"{np.mean(results['max_y_deviations']):.6f}", "Макс. отклонения по оси Y"])
-            writer.writerow(
-                ["Среднее по Z", f"{np.mean(results['max_z_deviations']):.6f}", "Макс. отклонения по оси Z"])
+
+            max_deviations = axis_deviations_results['max_axis_deviations']
+            mean_deviations = axis_deviations_results['mean_axis_deviations']
+
+            writer.writerow(["Среднее максимальное отклонение",
+                             f"{np.mean(max_deviations):.6f}",
+                             "По всем частицам"])
+            writer.writerow(["Максимальное отклонение",
+                             f"{np.max(max_deviations):.6f}",
+                             "Наибольшее значение"])
+            writer.writerow(["Минимальное максимальное отклонение",
+                             f"{np.min(max_deviations):.6f}",
+                             "Наименьшее максимальное отклонение"])
+            writer.writerow(["Среднее среднее отклонение",
+                             f"{np.mean(mean_deviations):.6f}",
+                             "По всем частицам"])
+            writer.writerow(["Стандартное отклонение макс. отклонений",
+                             f"{np.std(max_deviations):.6f}",
+                             "Разброс максимальных отклонений"])
             writer.writerow([])  # Пустая строка
 
-            # Раздел 2: Топ-10 частиц с наибольшими отклонениями
-            writer.writerow(["ТОП-10 ЧАСТИЦ С НАИБОЛЬШИМИ ОТКЛОНЕНИЯМИ"])
-            writer.writerow(
-                ["Ранг", "ID частицы", "Макс. отклонение", "Ср. отклонение", "Медиана X", "Медиана Y", "Медиана Z"])
+            # Раздел: Статистика по осям координат
+            writer.writerow(["СТАТИСТИКА ОТКЛОНЕНИЙ ПО ОСЯМ КООРДИНАТ"])
+            writer.writerow(["Ось", "Ср. макс. отклонение", "Ср. отклонение", "Относительный вклад (%)"])
 
-            # Находим индексы топ-10 частиц по максимальным отклонениям
-            top10_indices = np.argsort(results['max_deviations'])[-10:][::-1]
+            max_x_mean = np.mean(axis_deviations_results['max_axis_x'])
+            max_y_mean = np.mean(axis_deviations_results['max_axis_y'])
+            max_z_mean = np.mean(axis_deviations_results['max_axis_z'])
+
+            mean_x_mean = np.mean(axis_deviations_results['mean_axis_x'])
+            mean_y_mean = np.mean(axis_deviations_results['mean_axis_y'])
+            mean_z_mean = np.mean(axis_deviations_results['mean_axis_z'])
+
+            total_max = max_x_mean + max_y_mean + max_z_mean
+            total_mean = mean_x_mean + mean_y_mean + mean_z_mean
+
+            for axis_name, max_val, mean_val in zip(['X', 'Y', 'Z'],
+                                                    [max_x_mean, max_y_mean, max_z_mean],
+                                                    [mean_x_mean, mean_y_mean, mean_z_mean]):
+                max_contribution = (max_val / total_max * 100) if total_max > 0 else 0
+                mean_contribution = (mean_val / total_mean * 100) if total_mean > 0 else 0
+                writer.writerow([axis_name, f"{max_val:.6f}", f"{mean_val:.6f}",
+                                 f"{max_contribution:.1f}% / {mean_contribution:.1f}%"])
+
+            writer.writerow([])  # Пустая строка
+
+            # Раздел: Данные по каждой частице
+            writer.writerow(["ДАННЫЕ ПО КАЖДОЙ ЧАСТИЦЕ"])
+            headers = [
+                "ID частицы",
+                "Медиана X", "Медиана Y", "Медиана Z",
+                "Параметр t", "Стд. t",
+                "Макс. откл. от оси", "Ср. откл. от оси", "Стд. откл. от оси",
+                "Макс. X от оси", "Макс. Y от оси", "Макс. Z от оси",
+                "Ср. X от оси", "Ср. Y от оси", "Ср. Z от оси",
+                "Расст. медианы до оси", "Относ. откл. (%)"
+            ]
+
+            writer.writerow(headers)
+
+            # Рассчитываем относительные отклонения (в процентах от среднего)
+            mean_all_deviations = np.mean(mean_deviations)
+
+            # Добавляем данные для каждой частицы
+            for i in range(n_particles):
+                # Относительное отклонение (в % от среднего)
+                relative_deviation = (mean_deviations[i] / mean_all_deviations * 100) if mean_all_deviations > 0 else 0
+
+                row = [
+                    i,  # ID частицы
+                    f"{results['median_positions'][i, 0]:.6f}",  # Медиана X
+                    f"{results['median_positions'][i, 1]:.6f}",  # Медиана Y
+                    f"{results['median_positions'][i, 2]:.6f}",  # Медиана Z
+                    f"{axis_deviations_results['mean_projections'][i]:.6f}",  # Параметр t (средний)
+                    f"{axis_deviations_results['std_projections'][i]:.6f}",  # Стандартное отклонение t
+                    f"{max_deviations[i]:.6f}",  # Макс. отклонение от оси
+                    f"{mean_deviations[i]:.6f}",  # Ср. отклонение от оси
+                    f"{axis_deviations_results['std_axis_deviations'][i]:.6f}",  # Стд. отклонение от оси
+                    f"{axis_deviations_results['max_axis_x'][i]:.6f}",  # Макс. X от оси
+                    f"{axis_deviations_results['max_axis_y'][i]:.6f}",  # Макс. Y от оси
+                    f"{axis_deviations_results['max_axis_z'][i]:.6f}",  # Макс. Z от оси
+                    f"{axis_deviations_results['mean_axis_x'][i]:.6f}",  # Ср. X от оси
+                    f"{axis_deviations_results['mean_axis_y'][i]:.6f}",  # Ср. Y от оси
+                    f"{axis_deviations_results['mean_axis_z'][i]:.6f}",  # Ср. Z от оси
+                    f"{axis_results['distances_to_axis'][i]:.6f}",  # Расстояние медианы до оси
+                    f"{relative_deviation:.2f}"  # Относительное отклонение (%)
+                ]
+
+                writer.writerow(row)
+
+            # Раздел: Топ-10 частиц с наибольшими отклонениями от оси
+            writer.writerow([])  # Пустая строка
+            writer.writerow(["ТОП-10 ЧАСТИЦ С НАИБОЛЬШИМИ ОТКЛОНЕНИЯМИ ОТ ОСИ"])
+            writer.writerow(["Ранг", "ID частицы", "Макс. откл. от оси", "Ср. откл. от оси",
+                             "Медиана X", "Медиана Y", "Медиана Z", "Параметр t"])
+
+            # Находим индексы топ-10 частиц по максимальным отклонениям от оси
+            top10_indices = np.argsort(max_deviations)[-10:][::-1]
 
             for rank, idx in enumerate(top10_indices, 1):
                 writer.writerow([
                     rank,
                     idx,
-                    f"{results['max_deviations'][idx]:.6f}",
-                    f"{results['mean_deviations'][idx]:.6f}",
+                    f"{max_deviations[idx]:.6f}",
+                    f"{mean_deviations[idx]:.6f}",
                     f"{results['median_positions'][idx, 0]:.6f}",
                     f"{results['median_positions'][idx, 1]:.6f}",
-                    f"{results['median_positions'][idx, 2]:.6f}"
+                    f"{results['median_positions'][idx, 2]:.6f}",
+                    f"{axis_deviations_results['mean_projections'][idx]:.6f}"
                 ])
 
-            writer.writerow([])  # Пустая строка
+        print(f"CSV файл с отклонениями от оси сохранен: {full_path}")
+        print(f"Количество записей: {n_particles} частиц")
 
-            # Раздел 3: Полная таблица данных по всем частицам
-            writer.writerow(["ПОЛНЫЕ ДАННЫЕ ПО ВСЕМ ЧАСТИЦАМ"])
-            writer.writerow(["ID", "Медиана X", "Медиана Y", "Медиана Z",
-                             "Макс. откл.", "Ср. откл.",
-                             "Макс. X", "Макс. Y", "Макс. Z",
-                             "Ср. X", "Ср. Y", "Ср. Z"])
+        # Создаем также простую версию CSV с помощью pandas
+        print("\nСоздание упрощенной версии CSV...")
 
-            # Добавляем данные для каждой частицы
-            for i in range(n_particles):
-                writer.writerow([
-                    i,
-                    f"{results['median_positions'][i, 0]:.6f}",
-                    f"{results['median_positions'][i, 1]:.6f}",
-                    f"{results['median_positions'][i, 2]:.6f}",
-                    f"{results['max_deviations'][i]:.6f}",
-                    f"{results['mean_deviations'][i]:.6f}",
-                    f"{results['max_x_deviations'][i]:.6f}",
-                    f"{results['max_y_deviations'][i]:.6f}",
-                    f"{results['max_z_deviations'][i]:.6f}",
-                    f"{results['mean_x_deviations'][i]:.6f}",
-                    f"{results['mean_y_deviations'][i]:.6f}",
-                    f"{results['mean_z_deviations'][i]:.6f}"
-                ])
-
-        print(f"CSV файл сохранен: {full_path}")
-
-        # Проверяем и показываем содержимое файла
-        print("\nПРОВЕРКА СОХРАНЕННОГО ФАЙЛА:")
-        print("-" * 80)
-
-        with open(full_path, 'r', encoding='utf-8-sig') as f:
-            lines = f.readlines()
-            print(f"Всего строк в файле: {len(lines)}")
-            print("\nПервые 20 строк файла:")
-            for i, line in enumerate(lines[:20]):
-                print(f"{i + 1:3d}: {line.strip()}")
-
-        print("-" * 80)
-
-        # Альтернативный вариант: использование pandas для создания CSV
-        print("\nАЛЬТЕРНАТИВНЫЙ ВАРИАНТ (используя pandas):")
-
-        # Создаем DataFrame для основной таблицы данных
-        data_for_df = []
+        # Создаем DataFrame для простой версии
+        simple_data = []
         for i in range(n_particles):
-            data_for_df.append({
-                'ID': i,
+            simple_data.append({
+                'Particle_ID': i,
                 'Median_X': results['median_positions'][i, 0],
                 'Median_Y': results['median_positions'][i, 1],
                 'Median_Z': results['median_positions'][i, 2],
-                'Max_Deviation': results['max_deviations'][i],
-                'Mean_Deviation': results['mean_deviations'][i],
-                'Max_X': results['max_x_deviations'][i],
-                'Max_Y': results['max_y_deviations'][i],
-                'Max_Z': results['max_z_deviations'][i],
-                'Mean_X': results['mean_x_deviations'][i],
-                'Mean_Y': results['mean_y_deviations'][i],
-                'Mean_Z': results['mean_z_deviations'][i]
+                'Mean_Projection_t': axis_deviations_results['mean_projections'][i],
+                'Max_Deviation_From_Axis': max_deviations[i],
+                'Mean_Deviation_From_Axis': mean_deviations[i],
+                'Std_Deviation_From_Axis': axis_deviations_results['std_axis_deviations'][i],
+                'Distance_Median_To_Axis': axis_results['distances_to_axis'][i],
+                'Max_X_Deviation': axis_deviations_results['max_axis_x'][i],
+                'Max_Y_Deviation': axis_deviations_results['max_axis_y'][i],
+                'Max_Z_Deviation': axis_deviations_results['max_axis_z'][i]
             })
 
-        df = pd.DataFrame(data_for_df)
+        simple_df = pd.DataFrame(simple_data)
+        simple_csv_path = os.path.join(output_path, "axis_deviations_simple.csv")
+        simple_df.to_csv(simple_csv_path, index=False, float_format='%.6f', encoding='utf-8-sig')
 
-        # Сохраняем DataFrame в CSV
-        pandas_csv_path = os.path.join(output_path, "particle_data_clean.csv")
-        df.to_csv(pandas_csv_path, index=False, float_format='%.6f', encoding='utf-8-sig')
+        print(f"Упрощенный CSV файл сохранен: {simple_csv_path}")
 
-        print(f"CSV созданный через pandas: {pandas_csv_path}")
-        print(f"Размер таблицы: {df.shape[0]} строк × {df.shape[1]} столбцов")
-        print("\nПервые 5 строк таблицы:")
-        print(df.head().to_string())
-
-        # Создаем отдельный файл со статистикой
+        # Создаем файл со сводной статистикой
         stats_data = {
-            'Parameter': [
+            'Statistic': [
                 'Total Particles',
-                'Mean Max Deviation',
-                'Max Deviation',
-                'Min Deviation',
-                'Mean Mean Deviation',
-                'Mean Max X',
-                'Mean Max Y',
-                'Mean Max Z'
+                'Mean Max Deviation From Axis',
+                'Max Deviation From Axis',
+                'Min Max Deviation From Axis',
+                'Mean Mean Deviation From Axis',
+                'Std of Max Deviations',
+                'Axis R²',
+                'Mean Distance to Axis',
+                'Max Distance to Axis'
             ],
             'Value': [
                 n_particles,
-                f"{np.mean(results['max_deviations']):.6f}",
-                f"{np.max(results['max_deviations']):.6f}",
-                f"{np.min(results['max_deviations']):.6f}",
-                f"{np.mean(results['mean_deviations']):.6f}",
-                f"{np.mean(results['max_x_deviations']):.6f}",
-                f"{np.mean(results['max_y_deviations']):.6f}",
-                f"{np.mean(results['max_z_deviations']):.6f}"
-            ],
-            'Description': [
-                'Total number of particles analyzed',
-                'Average of maximum deviations across all particles',
-                'Largest maximum deviation found',
-                'Smallest maximum deviation found',
-                'Average of mean deviations across all particles',
-                'Average of maximum X deviations',
-                'Average of maximum Y deviations',
-                'Average of maximum Z deviations'
+                f"{np.mean(max_deviations):.6f}",
+                f"{np.max(max_deviations):.6f}",
+                f"{np.min(max_deviations):.6f}",
+                f"{np.mean(mean_deviations):.6f}",
+                f"{np.std(max_deviations):.6f}",
+                f"{axis_results['r_squared']:.6f}",
+                f"{axis_results['mean_distance']:.6f}",
+                f"{axis_results['max_distance']:.6f}"
             ]
         }
 
         stats_df = pd.DataFrame(stats_data)
-        stats_csv_path = os.path.join(output_path, "statistics_summary.csv")
+        stats_csv_path = os.path.join(output_path, "axis_statistics_summary.csv")
         stats_df.to_csv(stats_csv_path, index=False, encoding='utf-8-sig')
 
-        print(f"\nФайл со статистикой: {stats_csv_path}")
+        print(f"Файл со статистикой сохранен: {stats_csv_path}")
 
-        return full_path, pandas_csv_path, stats_csv_path
+        return full_path, simple_csv_path, stats_csv_path
 
     except Exception as e:
-        print(f"Ошибка при сохранении CSV файла: {e}")
+        print(f"Ошибка при сохранении CSV файла с отклонениями от оси: {e}")
         import traceback
         traceback.print_exc()
         return None, None, None
 
 
-def save_simple_csv(results, output_path, filename="particle_results_simple.csv"):
+def plot_axis_deviations(axis_deviations_results, output_path, filename_prefix="axis_deviations"):
     """
-    Сохраняет результаты в простом CSV формате без русских символов.
+    Создает графики для визуализации отклонений от оси.
+    """
+    if axis_deviations_results is None:
+        return []
+
+    try:
+        print(f"\nСоздание графиков отклонений от оси...")
+
+        plot_files = []
+
+        max_deviations = axis_deviations_results['max_axis_deviations']
+        mean_deviations = axis_deviations_results['mean_axis_deviations']
+
+        # 1. Гистограмма максимальных отклонений от оси
+        plt.figure(figsize=(10, 6))
+        plt.hist(max_deviations, bins=50, alpha=0.7, color='lightcoral', edgecolor='black')
+        plt.xlabel('Максимальное отклонение от оси')
+        plt.ylabel('Количество частиц')
+        plt.title('Распределение максимальных отклонений частиц от оси')
+        plt.grid(True, alpha=0.3)
+
+        mean_max = np.mean(max_deviations)
+        median_max = np.median(max_deviations)
+        plt.axvline(mean_max, color='red', linestyle='--', label=f'Среднее: {mean_max:.4f}')
+        plt.axvline(median_max, color='green', linestyle='--', label=f'Медиана: {median_max:.4f}')
+        plt.legend()
+
+        hist_path = os.path.join(output_path, f"{filename_prefix}_histogram.png")
+        plt.savefig(hist_path, dpi=150, bbox_inches='tight')
+        plot_files.append(hist_path)
+        print(f"  Гистограмма сохранена: {hist_path}")
+
+        # 2. График отклонений от оси по частицам
+        plt.figure(figsize=(12, 6))
+        particle_indices = np.arange(len(max_deviations))
+
+        plt.subplot(1, 2, 1)
+        plt.scatter(particle_indices, max_deviations, alpha=0.5, s=10, color='red')
+        plt.xlabel('Индекс частицы')
+        plt.ylabel('Максимальное отклонение от оси')
+        plt.title('Максимальные отклонения от оси по частицам')
+        plt.grid(True, alpha=0.3)
+
+        plt.subplot(1, 2, 2)
+        plt.scatter(particle_indices, mean_deviations, alpha=0.5, s=10, color='orange')
+        plt.xlabel('Индекс частицы')
+        plt.ylabel('Среднее отклонение от оси')
+        plt.title('Средние отклонения от оси по частицам')
+        plt.grid(True, alpha=0.3)
+
+        scatter_path = os.path.join(output_path, f"{filename_prefix}_scatter.png")
+        plt.savefig(scatter_path, dpi=150, bbox_inches='tight')
+        plot_files.append(scatter_path)
+        print(f"  Точечные графики сохранены: {scatter_path}")
+
+        # 3. График отклонений от оси по координатам
+        plt.figure(figsize=(12, 8))
+
+        plt.subplot(2, 2, 1)
+        plt.scatter(particle_indices, axis_deviations_results['max_axis_x'],
+                    alpha=0.5, s=10, color='r', label='X')
+        plt.scatter(particle_indices, axis_deviations_results['max_axis_y'],
+                    alpha=0.5, s=10, color='g', label='Y')
+        plt.scatter(particle_indices, axis_deviations_results['max_axis_z'],
+                    alpha=0.5, s=10, color='b', label='Z')
+        plt.xlabel('Индекс частицы')
+        plt.ylabel('Максимальное отклонение')
+        plt.title('Максимальные отклонения от оси по координатам')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+
+        plt.subplot(2, 2, 2)
+        plt.scatter(particle_indices, axis_deviations_results['mean_axis_x'],
+                    alpha=0.5, s=10, color='r', label='X')
+        plt.scatter(particle_indices, axis_deviations_results['mean_axis_y'],
+                    alpha=0.5, s=10, color='g', label='Y')
+        plt.scatter(particle_indices, axis_deviations_results['mean_axis_z'],
+                    alpha=0.5, s=10, color='b', label='Z')
+        plt.xlabel('Индекс частицы')
+        plt.ylabel('Среднее отклонение')
+        plt.title('Средние отклонения от оси по координатам')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+
+        plt.subplot(2, 2, 3)
+        components = ['X', 'Y', 'Z']
+        max_values = [np.mean(axis_deviations_results['max_axis_x']),
+                      np.mean(axis_deviations_results['max_axis_y']),
+                      np.mean(axis_deviations_results['max_axis_z'])]
+        plt.bar(components, max_values, color=['red', 'green', 'blue'], alpha=0.7)
+        plt.ylabel('Среднее максимальное отклонение')
+        plt.title('Средние максимальные отклонения от оси по осям')
+
+        plt.subplot(2, 2, 4)
+        mean_values = [np.mean(axis_deviations_results['mean_axis_x']),
+                       np.mean(axis_deviations_results['mean_axis_y']),
+                       np.mean(axis_deviations_results['mean_axis_z'])]
+        plt.bar(components, mean_values, color=['red', 'green', 'blue'], alpha=0.7)
+        plt.ylabel('Среднее отклонение')
+        plt.title('Средние отклонения от оси по осям')
+
+        plt.tight_layout()
+        coords_path = os.path.join(output_path, f"{filename_prefix}_coordinates.png")
+        plt.savefig(coords_path, dpi=150, bbox_inches='tight')
+        plot_files.append(coords_path)
+        print(f"  Графики по координатам сохранены: {coords_path}")
+
+        # 4. График зависимости отклонений от положения вдоль оси
+        plt.figure(figsize=(10, 6))
+
+        projections = axis_deviations_results['mean_projections']
+
+        plt.subplot(1, 2, 1)
+        plt.scatter(projections, max_deviations, alpha=0.5, s=10, color='red')
+        plt.xlabel('Параметр t (положение вдоль оси)')
+        plt.ylabel('Максимальное отклонение от оси')
+        plt.title('Зависимость отклонений от положения вдоль оси')
+        plt.grid(True, alpha=0.3)
+
+        # Линейная регрессия для тренда
+        if len(projections) > 1:
+            slope, intercept, r_value, p_value, std_err = stats.linregress(projections, max_deviations)
+            x_fit = np.array([np.min(projections), np.max(projections)])
+            y_fit = slope * x_fit + intercept
+            plt.plot(x_fit, y_fit, 'r--', alpha=0.7,
+                     label=f'Тренд: R²={r_value ** 2:.3f}')
+            plt.legend()
+
+        plt.subplot(1, 2, 2)
+        plt.scatter(projections, mean_deviations, alpha=0.5, s=10, color='orange')
+        plt.xlabel('Параметр t (положение вдоль оси)')
+        plt.ylabel('Среднее отклонение от оси')
+        plt.title('Зависимость средних отклонений от положения')
+        plt.grid(True, alpha=0.3)
+
+        # Линейная регрессия для тренда
+        if len(projections) > 1:
+            slope, intercept, r_value, p_value, std_err = stats.linregress(projections, mean_deviations)
+            x_fit = np.array([np.min(projections), np.max(projections)])
+            y_fit = slope * x_fit + intercept
+            plt.plot(x_fit, y_fit, 'r--', alpha=0.7,
+                     label=f'Тренд: R²={r_value ** 2:.3f}')
+            plt.legend()
+
+        plt.tight_layout()
+        trend_path = os.path.join(output_path, f"{filename_prefix}_trend.png")
+        plt.savefig(trend_path, dpi=150, bbox_inches='tight')
+        plot_files.append(trend_path)
+        print(f"  Графики трендов сохранены: {trend_path}")
+
+        plt.close('all')
+
+        return plot_files
+
+    except Exception as e:
+        print(f"Ошибка при создании графиков отклонений от оси: {e}")
+        return []
+
+
+def plot_axis_3d(median_positions, axis_results, output_path, filename="axis_3d_plot.png"):
+    """
+    Строит 3D график медианных положений частиц и оси структуры.
     """
     try:
-        n_particles = len(results['particle_indices'])
+        print(f"\nСоздание 3D графика оси структуры...")
 
-        # Создаем DataFrame с английскими заголовками
-        data = []
-        for i in range(n_particles):
-            data.append({
-                'Particle_ID': i,
-                'Median_X': f"{results['median_positions'][i, 0]:.6f}",
-                'Median_Y': f"{results['median_positions'][i, 1]:.6f}",
-                'Median_Z': f"{results['median_positions'][i, 2]:.6f}",
-                'Max_Deviation': f"{results['max_deviations'][i]:.6f}",
-                'Mean_Deviation': f"{results['mean_deviations'][i]:.6f}",
-                'Max_X_Dev': f"{results['max_x_deviations'][i]:.6f}",
-                'Max_Y_Dev': f"{results['max_y_deviations'][i]:.6f}",
-                'Max_Z_Dev': f"{results['max_z_deviations'][i]:.6f}",
-                'Mean_X_Dev': f"{results['mean_x_deviations'][i]:.6f}",
-                'Mean_Y_Dev': f"{results['mean_y_deviations'][i]:.6f}",
-                'Mean_Z_Dev': f"{results['mean_z_deviations'][i]:.6f}"
-            })
+        fig = plt.figure(figsize=(14, 10))
+        ax = fig.add_subplot(111, projection='3d')
 
-        df = pd.DataFrame(data)
+        # 1. Рисуем медианные положения частиц
+        scatter = ax.scatter(median_positions[:, 0],
+                             median_positions[:, 1],
+                             median_positions[:, 2],
+                             c='blue', alpha=0.6, s=50,
+                             label='Медианные положения частиц')
 
-        # Сохраняем в CSV
+        # 2. Рисуем ось структуры
+        line_points = axis_results['line_points']
+        ax.plot(line_points[:, 0], line_points[:, 1], line_points[:, 2],
+                color='red', linewidth=3, label='Ось структуры')
+
+        # 3. Рисуем центр масс
+        centroid = axis_results['centroid']
+        ax.scatter(centroid[0], centroid[1], centroid[2],
+                   color='green', s=200, marker='*',
+                   label='Центр масс', edgecolors='black')
+
+        # 4. Рисуем направляющий вектор
+        direction = axis_results['direction']
+        scale = np.ptp(median_positions, axis=0).max() * 0.5
+        vector_end = centroid + direction * scale
+        ax.quiver(centroid[0], centroid[1], centroid[2],
+                  direction[0], direction[1], direction[2],
+                  color='orange', length=scale, arrow_length_ratio=0.1,
+                  linewidth=2, label='Направление оси')
+
+        # Настройки графика
+        ax.set_xlabel('X', fontsize=12)
+        ax.set_ylabel('Y', fontsize=12)
+        ax.set_zlabel('Z', fontsize=12)
+        ax.set_title('Медианные положения частиц и ось структуры', fontsize=14, pad=20)
+
+        # Добавляем информацию об уравнении прямой
+        equation_text = f"Ось: (x-{centroid[0]:.2f})/{direction[0]:.2f} = " \
+                        f"(y-{centroid[1]:.2f})/{direction[1]:.2f} = " \
+                        f"(z-{centroid[2]:.2f})/{direction[2]:.2f}\n" \
+                        f"R² = {axis_results['r_squared']:.4f}"
+
+        ax.text2D(0.05, 0.95, equation_text, transform=ax.transAxes,
+                  fontsize=10, verticalalignment='top',
+                  bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+        ax.legend(loc='upper right', fontsize=10)
+
+        # Устанавливаем одинаковый масштаб по осям
+        max_range = np.array([median_positions[:, 0].max() - median_positions[:, 0].min(),
+                              median_positions[:, 1].max() - median_positions[:, 1].min(),
+                              median_positions[:, 2].max() - median_positions[:, 2].min()]).max() / 2.0
+
+        mid_x = (median_positions[:, 0].max() + median_positions[:, 0].min()) * 0.5
+        mid_y = (median_positions[:, 1].max() + median_positions[:, 1].min()) * 0.5
+        mid_z = (median_positions[:, 2].max() + median_positions[:, 2].min()) * 0.5
+
+        ax.set_xlim(mid_x - max_range, mid_x + max_range)
+        ax.set_ylim(mid_y - max_range, mid_y + max_range)
+        ax.set_zlim(mid_z - max_range, mid_z + max_range)
+
+        # Сохраняем график
         full_path = os.path.join(output_path, filename)
-        df.to_csv(full_path, index=False, encoding='utf-8')
+        plt.savefig(full_path, dpi=150, bbox_inches='tight')
+        print(f"  3D график оси сохранен: {full_path}")
 
-        print(f"\nПростой CSV файл сохранен: {full_path}")
-        print("Структура файла:")
-        print(f"Количество строк: {len(df)}")
-        print(f"Количество столбцов: {len(df.columns)}")
-        print("\nЗаголовки столбцов:")
-        for i, col in enumerate(df.columns, 1):
-            print(f"{i:2d}. {col}")
+        plt.close('all')
 
         return full_path
 
     except Exception as e:
-        print(f"Ошибка при сохранении простого CSV: {e}")
-        return None
-
-
-def save_csv_with_excel_compatibility(results, output_path, filename="particle_results_excel.csv"):
-    """
-    Сохраняет CSV файл с максимальной совместимостью с Excel.
-    """
-    try:
-        full_path = os.path.join(output_path, filename)
-
-        with open(full_path, 'w', newline='', encoding='utf-8-sig') as f:
-            writer = csv.writer(f, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-
-            # Записываем заголовки
-            headers = [
-                "Particle ID", "Median X", "Median Y", "Median Z",
-                "Maximum Deviation", "Mean Deviation",
-                "Max X Dev", "Max Y Dev", "Max Z Dev",
-                "Mean X Dev", "Mean Y Dev", "Mean Z Dev"
-            ]
-            writer.writerow(headers)
-
-            # Записываем данные
-            for i in range(len(results['particle_indices'])):
-                row = [
-                    i,
-                    results['median_positions'][i, 0],
-                    results['median_positions'][i, 1],
-                    results['median_positions'][i, 2],
-                    results['max_deviations'][i],
-                    results['mean_deviations'][i],
-                    results['max_x_deviations'][i],
-                    results['max_y_deviations'][i],
-                    results['max_z_deviations'][i],
-                    results['mean_x_deviations'][i],
-                    results['mean_y_deviations'][i],
-                    results['mean_z_deviations'][i]
-                ]
-                writer.writerow(row)
-
-        print(f"\nCSV файл для Excel сохранен: {full_path}")
-        print("Этот файл должен корректно открываться в Microsoft Excel.")
-
-        return full_path
-
-    except Exception as e:
-        print(f"Ошибка при сохранении CSV для Excel: {e}")
+        print(f"Ошибка при создании 3D графика оси: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -544,7 +817,7 @@ def main():
     path = "C:/Users/17.3 Active Systems/Downloads/3Д/3Д"  # ЗАМЕНИТЕ НА ВАШ ПУТЬ!
 
     print("=" * 70)
-    print("АНАЛИЗ КООРДИНАТ ЧАСТИЦ")
+    print("АНАЛИЗ КООРДИНАТ ЧАСТИЦ И РАСЧЕТ ОТКЛОНЕНИЙ ОТ ОСИ")
     print("=" * 70)
 
     # 1. Чтение данных
@@ -561,85 +834,56 @@ def main():
         print("Не удалось рассчитать отклонения. Завершение работы.")
         return
 
-    # 3. Сохранение результатов в разные форматы CSV
-    print("\n" + "=" * 70)
-    print("СОЗДАНИЕ CSV ФАЙЛОВ")
-    print("=" * 70)
+    # 3. Расчет оси структуры
+    axis_results = calculate_axis_line(results['median_positions'])
 
-    # Вариант 1: Детальный CSV с русским текстом
-    csv_file1, csv_file2, csv_file3 = save_results_to_csv(results, path)
+    # 4. Расчет отклонений от оси во времени
+    axis_deviations_results = calculate_deviations_from_axis(coords_3d, axis_results)
 
-    # Вариант 2: Простой CSV с английскими заголовками
-    simple_csv = save_simple_csv(results, path)
+    # 5. Сохранение отклонений от оси в CSV
+    axis_csv_files = save_axis_deviations_to_csv(results, axis_results,
+                                                 axis_deviations_results, path)
 
-    # Вариант 3: CSV с совместимостью для Excel
-    excel_csv = save_csv_with_excel_compatibility(results, path)
+    # 6. Построение графиков отклонений от оси
+    axis_deviations_plots = plot_axis_deviations(axis_deviations_results, path)
 
-    # 4. Создание графиков
-    plot_files = plot_deviations(results, path)
+    # 7. Построение 3D графика оси
+    axis_3d_plot = plot_axis_3d(results['median_positions'], axis_results, path)
 
     print("\n" + "=" * 70)
     print("АНАЛИЗ ЗАВЕРШЕН УСПЕШНО!")
     print("=" * 70)
 
     # Сводка созданных файлов
-    print("\nСОЗДАННЫЕ ФАЙЛЫ:")
-    files_created = []
+    print("\nСОЗДАННЫЕ ФАЙЛЫ ОТКЛОНЕНИЙ ОТ ОСИ:")
 
-    if csv_file1:
-        files_created.append(("Детальный CSV (русский текст)", csv_file1))
-    if csv_file2:
-        files_created.append(("Чистые данные (pandas)", csv_file2))
-    if csv_file3:
-        files_created.append(("Статистика", csv_file3))
-    if simple_csv:
-        files_created.append(("Простой CSV", simple_csv))
-    if excel_csv:
-        files_created.append(("CSV для Excel", excel_csv))
+    if axis_csv_files:
+        print(f"• Подробный CSV файл: {os.path.basename(axis_csv_files[0])}")
+        print(f"• Упрощенный CSV файл: {os.path.basename(axis_csv_files[1])}")
+        print(f"• Статистика CSV файл: {os.path.basename(axis_csv_files[2])}")
 
-    for i, (desc, filepath) in enumerate(files_created, 1):
-        print(f"{i}. {desc}: {os.path.basename(filepath)}")
+    if axis_deviations_plots:
+        print(f"• Графики отклонений от оси ({len(axis_deviations_plots)} файлов):")
+        for plot_file in axis_deviations_plots:
+            print(f"  - {os.path.basename(plot_file)}")
 
-    if plot_files:
-        print(f"\nГрафики (PNG):")
-        for i, plot_file in enumerate(plot_files, 1):
-            print(f"{i}. {os.path.basename(plot_file)}")
+    if axis_3d_plot:
+        print(f"• 3D график оси: {os.path.basename(axis_3d_plot)}")
 
     # Краткая статистика
-    print("\nКРАТКАЯ СТАТИСТИКА:")
+    print("\nКРАТКАЯ СТАТИСТИКА ОТКЛОНЕНИЙ ОТ ОСИ:")
     print(f"• Проанализировано частиц: {len(results['particle_indices'])}")
-    print(f"• Среднее макс. отклонение: {np.mean(results['max_deviations']):.4f}")
-    print(f"• Среднее среднее отклонение: {np.mean(results['mean_deviations']):.4f}")
 
-    # Находим частицу с максимальным отклонением
-    max_idx = np.argmax(results['max_deviations'])
-    print(f"• Частица с наибольшим отклонением: ID={max_idx}, отклонение={results['max_deviations'][max_idx]:.4f}")
+    if axis_deviations_results:
+        max_deviations = axis_deviations_results['max_axis_deviations']
+        mean_deviations = axis_deviations_results['mean_axis_deviations']
 
+        print(f"• Среднее максимальное отклонение от оси: {np.mean(max_deviations):.4f}")
+        print(f"• Максимальное отклонение от оси: {np.max(max_deviations):.4f}")
+        print(f"• Среднее среднее отклонение от оси: {np.mean(mean_deviations):.4f}")
 
-def check_csv_encoding(filepath):
-    """
-    Проверяет кодировку CSV файла.
-    """
-    try:
-        # Пробуем разные кодировки
-        encodings = ['utf-8', 'utf-8-sig', 'cp1251', 'iso-8859-1', 'windows-1251']
-
-        for encoding in encodings:
-            try:
-                with open(filepath, 'r', encoding=encoding) as f:
-                    content = f.read(1024)  # Читаем первые 1024 символа
-                    print(f"\nПроверка кодировки {encoding}: УСПЕХ")
-                    print(f"Первые 100 символов: {content[:100]}")
-                    return encoding
-            except UnicodeDecodeError:
-                print(f"Проверка кодировки {encoding}: ОШИБКА")
-
-        print("\nНе удалось определить кодировку файла.")
-        return None
-
-    except Exception as e:
-        print(f"Ошибка при проверке кодировки: {e}")
-        return None
+    if axis_results:
+        print(f"• Качество аппроксимации оси R²: {axis_results['r_squared']:.4f}")
 
 
 if __name__ == "__main__":
@@ -650,38 +894,42 @@ if __name__ == "__main__":
     if not os.path.exists(path):
         print(f"Папка {path} не существует!")
 
-        # Создаем тестовые данные
+        # Создаем тестовые данные с явной линейной структурой
         n_timesteps = 50
-        n_particles = 20
+        n_particles = 30
 
         np.random.seed(42)
 
+        # Создаем линейную структуру вдоль оси
+        t = np.linspace(-5, 5, n_particles)
+
+        centroid = np.array([1.0, 2.0, 3.0])
+        direction = np.array([0.5, 0.3, 0.8])
+        direction = direction / np.linalg.norm(direction)
+
+        base_positions = np.array([centroid + ti * direction for ti in t])
+
+        # Добавляем шум
+        noise_level = 0.3
         x_data = np.zeros((n_timesteps, n_particles))
         y_data = np.zeros((n_timesteps, n_particles))
         z_data = np.zeros((n_timesteps, n_particles))
 
         for i in range(n_particles):
-            amplitude = 0.5 + 1.0 * (i / n_particles)
-            x_data[:, i] = np.random.randn(n_timesteps) * amplitude
-            y_data[:, i] = np.random.randn(n_timesteps) * amplitude * 0.8
-            z_data[:, i] = np.random.randn(n_timesteps) * amplitude * 1.2
+            for j in range(n_timesteps):
+                noise = np.random.randn(3) * noise_level
+                time_variation = np.sin(j * 0.1) * 0.2
+                point = base_positions[i] + noise + direction * time_variation
+                x_data[j, i] = point[0]
+                y_data[j, i] = point[1]
+                z_data[j, i] = point[2]
 
         os.makedirs(path, exist_ok=True)
         np.savetxt(os.path.join(path, 'X1000.txt'), x_data)
         np.savetxt(os.path.join(path, 'Y1000.txt'), y_data)
         np.savetxt(os.path.join(path, 'Z1000.txt'), z_data)
 
-        print(f"Тестовые файлы созданы в {path}")
+        print(f"Тестовые файлы с линейной структурой созданы в {path}")
 
     # Полный анализ
     main()
-
-    # Проверка кодировки файлов (опционально)
-    print("\n" + "=" * 70)
-    print("ПРОВЕРКА КОДИРОВОК ФАЙЛОВ (опционально)")
-    print("=" * 70)
-
-    csv_files = [f for f in os.listdir(path) if f.endswith('.csv')]
-    for csv_file in csv_files[:3]:  # Проверяем только первые 3 файла
-        print(f"\nПроверка файла: {csv_file}")
-        check_csv_encoding(os.path.join(path, csv_file))
