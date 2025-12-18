@@ -958,12 +958,10 @@ def plot_interparticle_distances(distances_results, output_path, filename_prefix
         return []
 
 
-def main():
+def main(path):
     """
     Основная функция программы.
     """
-    # Укажите путь к папке с файлами
-    path = "C:/Users/17.3 Active Systems/Downloads/3Д/3Д"  # ЗАМЕНИТЕ НА ВАШ ПУТЬ!
 
     print("=" * 70)
     print("АНАЛИЗ СРЕДНИХ ПО ВРЕМЕНИ РАССТОЯНИЙ МЕЖДУ ЧАСТИЦАМИ")
@@ -1087,4 +1085,4 @@ if __name__ == "__main__":
             f"  Стандартные отклонения: от {base_stds_pixels[0] * SCALE:.1f} до {base_stds_pixels[-1] * SCALE:.1f} мкм")
 
     # Запускаем анализ средних расстояний
-    main()
+    main(path)
